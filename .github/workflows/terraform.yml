@@ -1,0 +1,59 @@
+name: Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: Layer (folder to run in)
+        type: choice
+        options:
+          - vpc
+          - eks
+        default: vpc
+      environment:
+        description: Environment (matches <layer>/env/<name>.tfvars)
+        type: choice
+        options:
+          - dev
+        default: dev
+      action:
+        description: Terraform action
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
+
+permissions:
+  id-token: write # required for OIDC to AWS
+  contents: read  # required for checkout
+
+concurrency:
+  group: terraform-${{ inputs.layer }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: ${{ inputs.layer }} / ${{ inputs.environment }} / ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.layer }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+
+      - run: terraform fmt -check
+      - run: terraform init -backend-config=env/${{ inputs.environment }}.backend.hcl
+      - run: terraform validate
+      - run: terraform plan -var-file=env/${{ inputs.environment }}.tfvars -out=tfplan
+
+      - name: Apply
+        if: inputs.action == 'apply'
+        run: terraform apply tfplan
