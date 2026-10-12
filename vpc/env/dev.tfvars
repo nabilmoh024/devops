@@ -1,4 +1,4 @@
-aws_region  = "us-east-1" # change to your region
+aws_region  = "ap-south-1" # change to your region
 project     = "devops"
 environment = "dev"
 
