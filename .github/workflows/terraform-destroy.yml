@@ -1,0 +1,83 @@
+
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: Terraform layer to destroy
+        type: choice
+        required: true
+        options:
+          - eks
+          - vpc
+        default: eks
+
+      environment:
+        description: Target environment
+        type: choice
+        required: true
+        options:
+          - dev
+        default: dev
+
+      confirmation:
+        description: Type DESTROY to confirm
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ inputs.layer }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  terraform-destroy:
+    name: Destroy ${{ inputs.layer }} / ${{ inputs.environment }}
+    if: inputs.confirmation == 'DESTROY'
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.layer }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config=env/${{ inputs.environment }}.backend.hcl \
+            -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Destroy Plan
+        run: |
+          terraform plan \
+            -destroy \
+            -var-file=env/${{ inputs.environment }}.tfvars \
+            -out=tfdestroyplan \
+            -input=false
+        env:
+          TF_VAR_api_allowed_cidrs: '["${{ secrets.API_ALLOWED_CIDR }}"]'
+
+      - name: Display Destroy Plan
+        run: terraform show -no-color tfdestroyplan
+
+      - name: Terraform Destroy
+        run: terraform apply -input=false tfdestroyplan
