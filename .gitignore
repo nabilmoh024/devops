@@ -7,3 +7,20 @@ crash.*.log
 *.tfplan
 
 # Keep the dependency lock file committed: .terraform.lock.hcl
+
+# Plan file (our workflow writes -out=tfplan, no extension)
+tfplan
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform CLI config
+.terraformrc
+terraform.rc
+
+# Local-only values that must never be committed
+*.local.tfvars
+.env
