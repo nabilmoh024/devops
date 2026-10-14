@@ -1,0 +1,72 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: Layer to destroy (destroy eks BEFORE vpc)
+        type: choice
+        options:
+          - eks
+          - vpc
+        default: eks
+      environment:
+        description: Environment (matches <layer>/env/<name>.tfvars)
+        type: choice
+        options:
+          - dev
+        default: dev
+      confirm:
+        description: Type yes to confirm the destroy
+        type: string
+        required: true
+        default: "no"
+
+permissions:
+  contents: read # required for checkout
+
+concurrency:
+  group: terraform-${{ inputs.layer }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  confirm:
+    name: Confirm destroy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require yes
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "yes" ]; then
+            echo "::error::Destroy not confirmed. Re-run and type yes in the confirm input."
+            exit 1
+          fi
+
+  destroy:
+    name: DESTROY ${{ inputs.layer }} / ${{ inputs.environment }} @ ${{ github.ref_name }}
+    needs: confirm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.layer }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+
+      - run: terraform init -backend-config=env/${{ inputs.environment }}.backend.hcl
+
+      - name: Plan destroy
+        run: terraform plan -destroy -var-file=env/${{ inputs.environment }}.tfvars -out=tfplan
+        env:
+          TF_VAR_api_allowed_cidrs: '["${{ secrets.API_ALLOWED_CIDR }}"]'
+
+      - name: Apply destroy
+        run: terraform apply tfplan
