@@ -1,26 +1,31 @@
 variable "aws_region" {
   description = "AWS region to deploy the cluster into"
   type        = string
+  default = "ap-south-1"
 }
 
 variable "project" {
   description = "Project name, used in resource names and tags"
   type        = string
+  default     = "devops"
 }
 
 variable "environment" {
   description = "Environment name (for example dev, stage, prod)"
   type        = string
+  default     = "dev"
 }
 
 variable "state_bucket" {
   description = "S3 bucket that holds the vpc layer state"
   type        = string
+  default     = "arifb084devops"
 }
 
 variable "state_bucket_region" {
   description = "Region of the S3 state bucket"
   type        = string
+  default     = "ap-south-1"
 }
 
 variable "kubernetes_version" {
@@ -66,7 +71,7 @@ variable "node_initial_desired_size" {
 variable "log_retention_days" {
   description = "Days to keep control plane logs in CloudWatch"
   type        = number
-  default     = 7
+  default     = 1
 }
 
 variable "tags" {

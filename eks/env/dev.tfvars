@@ -18,4 +18,4 @@ admin_principal_arns = []
 node_instance_types       = ["t3a.medium", "t3.medium", "t2.medium"]
 node_max_size             = 2
 node_initial_desired_size = 1
-log_retention_days        = 7
+log_retention_days        = 1
