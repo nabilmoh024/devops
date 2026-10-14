@@ -10,7 +10,7 @@ kubernetes_version = "1.36"
 
 # REQUIRED: replace with your public IP, for example "203.0.113.10/32".
 # Plan fails until this is a valid CIDR (0.0.0.0/0 is rejected).
-api_allowed_cidrs = ["ip/32"]
+
 
 # Optional: IAM user/role ARNs that need kubectl admin besides the Terraform identity
 admin_principal_arns = []
