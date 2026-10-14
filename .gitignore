@@ -7,3 +7,4 @@ crash.*.log
 *.tfplan
 
 # Keep the dependency lock file committed: .terraform.lock.hcl
+*.auto.tfvars
