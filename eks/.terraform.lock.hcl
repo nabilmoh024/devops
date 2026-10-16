@@ -23,6 +23,7 @@ provider "registry.terraform.io/hashicorp/aws" {
     "zh:dc15fb3443312a42deb8b13f92c8d10a701e46eca0155f0709ad763057a85a1d",
     "zh:e9f6567a13f21123838aaf78d94f76da8c8f7783eff7f7aa781fd1c21d18d86c",
   ]
+  ]
 }
 
 provider "registry.terraform.io/hashicorp/cloudinit" {
