@@ -3,7 +3,7 @@ project     = "devops"
 environment = "dev"
 
 # State bucket of the vpc layer (same as vpc/env/dev.backend.hcl)
-state_bucket        = "arifb084devops"
+state_bucket        = "arifb098"
 state_bucket_region = "ap-south-1"
 
 kubernetes_version = "1.36"

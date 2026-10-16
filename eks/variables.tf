@@ -19,7 +19,7 @@ variable "environment" {
 variable "state_bucket" {
   description = "S3 bucket that holds the vpc layer state"
   type        = string
-  default     = "arifb084devops"
+  default     = "arifb098"
 }
 
 variable "state_bucket_region" {
