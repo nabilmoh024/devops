@@ -37,6 +37,7 @@ variable "kubernetes_version" {
 variable "api_allowed_cidrs" {
   description = "CIDR blocks allowed to reach the public Kubernetes API endpoint (use your own IP as x.x.x.x/32)"
   type        = list(string)
+ 
 
   validation {
     condition     = length(var.api_allowed_cidrs) > 0 && alltrue([for c in var.api_allowed_cidrs : can(cidrhost(c, 0)) && c != "0.0.0.0/0"])
