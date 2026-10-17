@@ -1,0 +1,78 @@
+name: EKS Scale Nodes
+
+# Sets the desired node count of the EKS managed node group (0 = no nodes,
+# no node cost). Terraform ignores desired_size after creation, so scaling is
+# done here through the EKS API. The EKS control plane and the NAT gateway
+# still bill while the cluster exists.
+
+on:
+  workflow_dispatch:
+    inputs:
+      nodes:
+        description: Desired node count (0 stops all nodes)
+        type: choice
+        options:
+          - "0"
+          - "1"
+          - "2"
+        default: "0"
+
+permissions:
+  contents: read # no repo access is needed beyond the defaults
+
+# Same group as terraform.yml (eks / dev): never overlaps with a Terraform
+# or Helm run on the same cluster.
+concurrency:
+  group: terraform-eks-dev
+  cancel-in-progress: false
+
+env:
+  CLUSTER: devops-dev-eks
+  NODES: ${{ inputs.nodes }}
+
+jobs:
+  scale:
+    name: scale to ${{ inputs.nodes }} node(s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Scale the node group
+        run: |
+          set -euo pipefail
+          COUNT="$(aws eks list-nodegroups --cluster-name "$CLUSTER" --query 'length(nodegroups)' --output text)"
+          if [ "$COUNT" != "1" ]; then
+            echo "::error::Expected exactly 1 node group, found $COUNT"; exit 1
+          fi
+          NG="$(aws eks list-nodegroups --cluster-name "$CLUSTER" --query 'nodegroups[0]' --output text)"
+          Q='nodegroup.scalingConfig'
+          MIN="$(aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$NG" --query "$Q.minSize" --output text)"
+          MAX="$(aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$NG" --query "$Q.maxSize" --output text)"
+          CUR="$(aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$NG" --query "$Q.desiredSize" --output text)"
+          echo "Node group $NG: min=$MIN max=$MAX desired=$CUR, requested=$NODES"
+          if [ "$NODES" -gt "$MAX" ] || [ "$NODES" -lt "$MIN" ]; then
+            echo "::error::Requested $NODES is outside the allowed range $MIN-$MAX"; exit 1
+          fi
+          if [ "$CUR" = "$NODES" ]; then
+            echo "Already at $NODES node(s), nothing to do"; exit 0
+          fi
+          UPD="$(aws eks update-nodegroup-config --cluster-name "$CLUSTER" --nodegroup-name "$NG" --scaling-config "minSize=$MIN,maxSize=$MAX,desiredSize=$NODES" --query 'update.id' --output text)"
+          for _ in $(seq 1 60); do
+            S="$(aws eks describe-update --name "$CLUSTER" --nodegroup-name "$NG" --update-id "$UPD" --query 'update.status' --output text)"
+            case "$S" in
+              Successful) break ;;
+              Failed|Cancelled) echo "::error::Scaling update $S"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          for _ in $(seq 1 40); do
+            ST="$(aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$NG" --query 'nodegroup.status' --output text)"
+            [ "$ST" = "ACTIVE" ] && break
+            sleep 15
+          done
+          aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$NG" --query 'nodegroup.{status:status,scaling:scalingConfig}' --output json
