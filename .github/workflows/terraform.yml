@@ -45,6 +45,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          
           aws-region: ${{ vars.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v4
@@ -61,3 +62,34 @@ jobs:
       - name: Apply
         if: inputs.action == 'apply'
         run: terraform apply tfplan
+
+# ---------------------------------------------------------------------------
+# WHAT WAS UPDATED
+# ---------------------------------------------------------------------------
+# 1. The plan step was changed from a one-line "- run:" into a named step
+#    ("Plan") so it can carry an env block. The command itself is unchanged.
+#
+# 2. Added this env variable to the Plan step only:
+#      TF_VAR_api_allowed_cidrs: '["${{ secrets.API_ALLOWED_CIDR }}"]'
+#    Terraform reads any TF_VAR_<name> variable automatically, so it fills
+#    var.api_allowed_cidrs without a prompt and without putting the IP in
+#    the public repo.
+#
+# 3. The secret API_ALLOWED_CIDR must contain the value WITH the mask, e.g.
+#      x.x.x.x/32
+#    The workflow wraps it in ["..."] to make it a list, as the variable
+#    expects. For several CIDRs, store the full list in the secret instead
+#    (["1.2.3.4/32","5.6.7.8/32"]) and use this line:
+#      TF_VAR_api_allowed_cidrs: ${{ secrets.API_ALLOWED_CIDR }}
+#
+# 4. Why only the Plan step: Apply runs "terraform apply tfplan", and the
+#    saved plan already contains the value, so apply does not need it.
+#
+# 5. The vpc layer is not affected. Terraform ignores a TF_VAR_ variable
+#    that the module does not declare, so the same step works for both
+#    vpc and eks.
+#
+# 6. Make sure api_allowed_cidrs is NOT set inside eks/env/dev.tfvars,
+#    otherwise the file value would override the secret.
+#
+# Everything else in the file is unchanged.

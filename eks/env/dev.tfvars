@@ -8,6 +8,8 @@ state_bucket_region = "ap-south-1"
 
 kubernetes_version = "1.36"
 
+# REQUIRED: replace with your public IP, for example "203.0.113.10/32".
+# Plan fails until this is a valid CIDR (0.0.0.0/0 is rejected).
 
 
 # Optional: IAM user/role ARNs that need kubectl admin besides the Terraform identity
