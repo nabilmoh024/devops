@@ -1,0 +1,147 @@
+name: Helm Deploy
+
+# Manual deploys of the charts under helm/ to the EKS cluster.
+# lint and template never touch AWS. upgrade-install and uninstall add this
+# runner's IP to the cluster API allow-list and always restore the original
+# list at the end.
+
+on:
+  workflow_dispatch:
+    inputs:
+      chart:
+        description: Chart folder under helm/
+        type: choice
+        options:
+          - test-release
+        default: test-release
+      namespace:
+        description: Kubernetes namespace for the release
+        type: string
+        default: test
+      action:
+        description: Helm action
+        type: choice
+        options:
+          - lint
+          - template
+          - upgrade-install
+          - uninstall
+        default: lint
+
+permissions:
+  contents: read # required for checkout
+
+# Same group as terraform.yml (eks / dev): a Helm run and a Terraform run
+# never change the cluster at the same time.
+concurrency:
+  group: terraform-eks-dev
+  cancel-in-progress: false
+
+env:
+  CLUSTER: devops-dev-eks
+  CHART: ${{ inputs.chart }}
+  NAMESPACE: ${{ inputs.namespace }}
+
+jobs:
+  helm:
+    name: ${{ inputs.action }} ${{ inputs.chart }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+
+      - name: Lint chart
+        run: helm lint "helm/$CHART"
+
+      - name: Render chart
+        if: inputs.action == 'template'
+        run: helm template "$CHART" "helm/$CHART" --namespace "$NAMESPACE"
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        if: inputs.action == 'upgrade-install' || inputs.action == 'uninstall'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Allow this runner to reach the EKS API
+        if: inputs.action == 'upgrade-install' || inputs.action == 'uninstall'
+        run: |
+          set -euo pipefail
+          wait_update() {
+            local s
+            for _ in $(seq 1 60); do
+              s="$(aws eks describe-update --name "$CLUSTER" --update-id "$1" --query 'update.status' --output text)"
+              case "$s" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "::error::Cluster update $s"; return 1 ;;
+              esac
+              sleep 15
+            done
+            echo "::error::Timed out waiting for the cluster update"; return 1
+          }
+          MYIP="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')/32"
+          ORIG="$(aws eks describe-cluster --name "$CLUSTER" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output text | tr '\t' ',')"
+          for c in ${ORIG//,/ }; do echo "::add-mask::$c"; done
+          echo "ORIG_CIDRS=$ORIG" >> "$GITHUB_ENV"
+          case ",$ORIG," in
+            *",$MYIP,"*|*",0.0.0.0/0,"*) echo "Runner already allowed, no change needed" ;;
+            *)
+              UPD="$(aws eks update-cluster-config --name "$CLUSTER" --resources-vpc-config "publicAccessCidrs=$ORIG,$MYIP" --query 'update.id' --output text)"
+              wait_update "$UPD"
+              ;;
+          esac
+
+      - name: Connect to the cluster
+        if: inputs.action == 'upgrade-install' || inputs.action == 'uninstall'
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER" > /dev/null
+          for i in $(seq 1 12); do
+            if helm list --namespace kube-system > /dev/null 2>&1; then
+              echo "Cluster API reachable"; exit 0
+            fi
+            echo "Waiting for the API (attempt $i)"; sleep 10
+          done
+          echo "::error::Could not reach the EKS API"; exit 1
+
+      - name: Helm upgrade --install
+        if: inputs.action == 'upgrade-install'
+        run: |
+          helm upgrade --install "$CHART" "helm/$CHART" --namespace "$NAMESPACE" --create-namespace --atomic --timeout 5m
+          helm status "$CHART" --namespace "$NAMESPACE"
+
+      - name: Helm uninstall
+        if: inputs.action == 'uninstall'
+        run: helm uninstall "$CHART" --namespace "$NAMESPACE"
+
+      - name: Show releases
+        if: inputs.action == 'upgrade-install' || inputs.action == 'uninstall'
+        run: helm list --namespace "$NAMESPACE"
+
+      - name: Restore the original API allow-list
+        if: always() && env.ORIG_CIDRS != ''
+        run: |
+          set -euo pipefail
+          wait_update() {
+            local s
+            for _ in $(seq 1 60); do
+              s="$(aws eks describe-update --name "$CLUSTER" --update-id "$1" --query 'update.status' --output text)"
+              case "$s" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "::error::Cluster update $s"; return 1 ;;
+              esac
+              sleep 15
+            done
+            echo "::error::Timed out waiting for the cluster update"; return 1
+          }
+          norm() { tr ',' '\n' | sort | paste -sd, -; }
+          CUR="$(aws eks describe-cluster --name "$CLUSTER" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output text | tr '\t' ',' | norm)"
+          WANT="$(printf '%s' "$ORIG_CIDRS" | norm)"
+          if [ "$CUR" = "$WANT" ]; then
+            echo "Allow-list already original"; exit 0
+          fi
+          UPD="$(aws eks update-cluster-config --name "$CLUSTER" --resources-vpc-config "publicAccessCidrs=$ORIG_CIDRS" --query 'update.id' --output text)"
+          wait_update "$UPD"
+          echo "Allow-list restored"
