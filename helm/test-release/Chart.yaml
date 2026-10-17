@@ -1,0 +1,6 @@
+apiVersion: v2
+name: test-release
+description: Minimal chart used to prove Helm deployments to the EKS cluster work
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
