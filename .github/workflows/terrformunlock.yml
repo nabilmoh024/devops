@@ -1,0 +1,122 @@
+name: Terraform Unlock State
+
+# Clears a stuck Terraform state lock for the S3 backend (use_lockfile = true).
+# Lock object lives next to the state file:  s3://<bucket>/<key>.tflock
+# Bucket/region come from <layer>/env/<environment>.backend.hcl and the key
+# from <layer>/backend.tf, so nothing is hardcoded here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: Layer (folder to run in)
+        type: choice
+        options:
+          - vpc
+          - eks
+        default: vpc
+      environment:
+        description: Environment (matches <layer>/env/<name>.backend.hcl)
+        type: choice
+        options:
+          - dev
+        default: dev
+      method:
+        description: How to clear the lock
+        type: choice
+        options:
+          - delete-lockfile   # aws s3 rm of the .tflock object, no lock ID needed
+          - force-unlock      # terraform force-unlock, needs the lock ID
+        default: delete-lockfile
+      lock_id:
+        description: Lock ID (only for force-unlock; printed in the "Error acquiring the state lock" message)
+        type: string
+        required: false
+      confirm:
+        description: Type UNLOCK to confirm nobody is running plan/apply
+        type: string
+        required: true
+
+permissions:
+  contents: read # required for checkout
+
+# Same group as terraform.yml, so this never runs while a plan/apply for the
+# same layer/environment is in progress (it waits instead).
+concurrency:
+  group: terraform-${{ inputs.layer }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  unlock:
+    name: ${{ inputs.layer }} / ${{ inputs.environment }} / ${{ inputs.method }}
+    if: inputs.confirm == 'UNLOCK'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.layer }}
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      LOCK_ID: ${{ inputs.lock_id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve backend settings
+        run: |
+          BUCKET=$(grep -E '^\s*bucket\s*=' "env/${ENVIRONMENT}.backend.hcl" | awk -F'"' '{print $2}')
+          REGION=$(grep -E '^\s*region\s*=' "env/${ENVIRONMENT}.backend.hcl" | awk -F'"' '{print $2}')
+          KEY=$(grep -E '^\s*key\s*=' backend.tf | awk -F'"' '{print $2}')
+          if [ -z "$BUCKET" ] || [ -z "$REGION" ] || [ -z "$KEY" ]; then
+            echo "::error::Could not resolve bucket/region/key (bucket='$BUCKET' region='$REGION' key='$KEY')"
+            exit 1
+          fi
+          {
+            echo "BUCKET=$BUCKET"
+            echo "REGION=$REGION"
+            echo "LOCK_KEY=${KEY}.tflock"
+          } >> "$GITHUB_ENV"
+          echo "Lock object: s3://$BUCKET/${KEY}.tflock ($REGION)"
+
+      - name: Inspect lock
+        id: inspect
+        run: |
+          if aws s3api head-object --bucket "$BUCKET" --key "$LOCK_KEY" --region "$REGION" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Lock exists. Contents (who/when/operation):"
+            aws s3 cp "s3://$BUCKET/$LOCK_KEY" - --region "$REGION"
+            echo
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No lock object at s3://$BUCKET/$LOCK_KEY - nothing to clear."
+          fi
+
+      - name: Delete lock file
+        if: steps.inspect.outputs.found == 'true' && inputs.method == 'delete-lockfile'
+        run: aws s3 rm "s3://$BUCKET/$LOCK_KEY" --region "$REGION"
+
+      - uses: hashicorp/setup-terraform@v4
+        if: steps.inspect.outputs.found == 'true' && inputs.method == 'force-unlock'
+
+      - name: Terraform force-unlock
+        if: steps.inspect.outputs.found == 'true' && inputs.method == 'force-unlock'
+        run: |
+          if [ -z "$LOCK_ID" ]; then
+            echo "::error::method=force-unlock requires the lock_id input"
+            exit 1
+          fi
+          terraform init -input=false -backend-config="env/${ENVIRONMENT}.backend.hcl"
+          terraform force-unlock -force "$LOCK_ID"
+
+      - name: Verify lock is gone
+        if: steps.inspect.outputs.found == 'true'
+        run: |
+          if aws s3api head-object --bucket "$BUCKET" --key "$LOCK_KEY" --region "$REGION" >/dev/null 2>&1; then
+            echo "::error::Lock object still exists at s3://$BUCKET/$LOCK_KEY"
+            exit 1
+          fi
+          echo "Lock cleared."
