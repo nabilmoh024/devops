@@ -15,7 +15,7 @@ kubernetes_version = "1.36"
 # Optional: IAM user/role ARNs that need kubectl admin besides the Terraform identity
 admin_principal_arns = []
 
-node_instance_types       = ["t3a.medium", "t3.medium", "t2.medium"]
+node_instance_types       = ["t3.small", "t8i.small"]
 node_max_size             = 2
 node_initial_desired_size = 1
 log_retention_days        = 1
