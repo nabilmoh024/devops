@@ -110,8 +110,9 @@ jobs:
           for c in base istiod gateway; do
             OUT="$(helm search repo "istio/$c" --version "$ISTIO_VERSION" || true)"
             if ! grep -q "^istio/$c[[:space:]]" <<< "$OUT"; then
-              echo "::error::Chart istio/$c $ISTIO_VERSION was not found in the istio repository. Newest available:"
-              helm search repo "istio/$c" --versions | sed -n '1,6p'
+              NAMES="$(helm search repo istio/ | awk 'NR > 1 {print $1}' | paste -sd, -)"
+              VERS="$(helm search repo "istio/$c" --versions | awk 'NR > 1 && NR <= 6 {print $2}' | paste -sd, -)"
+              echo "::error::Chart istio/$c $ISTIO_VERSION was not found. Charts in the repo: [${NAMES:-none}]. Newest versions of istio/$c: [${VERS:-none}]."
               exit 1
             fi
             echo "Found istio/$c $ISTIO_VERSION"
