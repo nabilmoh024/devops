@@ -1,0 +1,9 @@
+# Helm chart repositories used by the workflows in .github/workflows.
+# One repository per line: <name> <https-url>
+# Blank lines and lines starting with # are ignored.
+#
+# A GitHub runner starts empty on every run, so repositories are not kept
+# between runs. The Helm Deploy workflow adds everything listed here at the
+# start of each run. To use a new repository, add a line below.
+
+istio https://istio-release.storage.googleapis.com/charts
