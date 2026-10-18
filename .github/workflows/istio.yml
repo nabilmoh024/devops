@@ -21,7 +21,7 @@ on:
       version:
         description: Istio version (change it to upgrade)
         type: string
-        default: "1.31.2"
+        default: "1.30.6"
       install_gateway:
         description: Also install the ingress gateway
         type: boolean
@@ -61,7 +61,7 @@ jobs:
           V="${ISTIO_VERSION//[[:space:]]/}"
           NS="${INJECT_NS//[[:space:]]/}"
           if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version must look like 1.31.2 (got '$ISTIO_VERSION')"; exit 1
+            echo "::error::version must look like 1.30.6 (got '$ISTIO_VERSION')"; exit 1
           fi
           if [ -n "$NS" ]; then
             if [ "${#NS}" -gt 63 ] || ! [[ "$NS" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then

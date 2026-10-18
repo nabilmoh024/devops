@@ -25,8 +25,10 @@ as a YAML file in `manifests/` and the workflow applies it.
 | `istio-ingress` (optional) | `istio/gateway` | `istio-ingress` |
 
 Chart repo: `https://istio-release.storage.googleapis.com/charts`.
-The default version is **1.31.2**, which supports Kubernetes 1.32-1.37
-(the cluster runs 1.36).
+The default version is **1.30.6**, the newest version published in that chart
+repo. Istio 1.30 supports Kubernetes 1.32-1.36 (the cluster runs 1.36). The
+workflow checks that the chosen version exists in the repo before it does
+anything else, and lists the available versions if it does not.
 
 ## Deploying
 
@@ -38,7 +40,7 @@ The default version is **1.31.2**, which supports Kubernetes 1.32-1.37
 | Input | Meaning |
 | --- | --- |
 | `action` | `validate` renders the charts and checks the YAML, no AWS needed. `install` installs or upgrades everything. `status` shows releases and pods. `uninstall` removes everything. |
-| `version` | Istio version, default `1.31.2`. Change it to upgrade. |
+| `version` | Istio version, default `1.30.6`. Change it to upgrade. |
 | `install_gateway` | Also install the ingress gateway (default off) |
 | `inject_namespace` | Optional. Label this namespace `istio-injection=enabled` so new pods get a sidecar |
 
