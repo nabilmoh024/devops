@@ -61,6 +61,19 @@ module "eks" {
     coredns    = {}
   }
 
+  # Istio: lets the EKS control plane call istiod's injection and validation
+  # webhooks (container port 15017) on the nodes
+  node_security_group_additional_rules = {
+    ingress_cluster_istio_webhook = {
+      description                   = "Cluster API to Istio webhooks (istiod)"
+      protocol                      = "tcp"
+      from_port                     = 15017
+      to_port                       = 15017
+      type                          = "ingress"
+      source_cluster_security_group = true
+    }
+  }
+
   eks_managed_node_groups = {
     spot = {
       ami_type       = "AL2023_x86_64_STANDARD"
