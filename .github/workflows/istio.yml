@@ -1,7 +1,8 @@
 name: Istio Deploy
 
-# Manual install / upgrade / removal of Istio on the EKS cluster, using the
-# official Helm charts and the config under istio/.
+# Installs, upgrades or removes Istio on the EKS cluster with the official Helm
+# charts and the config under istio/. Helm itself and the chart repositories
+# come from the same setup as helm.yml (pinned Helm, helm/repos.txt).
 # validate never touches AWS. The other actions add this runner's IP to the
 # cluster API allow-list and always restore the original list at the end.
 
@@ -41,10 +42,10 @@ concurrency:
 
 env:
   CLUSTER: devops-dev-eks
+  HELM_VERSION: v4.3.1
   ISTIO_VERSION: ${{ inputs.version }}
   INSTALL_GATEWAY: ${{ inputs.install_gateway }}
   INJECT_NS: ${{ inputs.inject_namespace }}
-  ISTIO_REPO: https://istio-release.storage.googleapis.com/charts
 
 jobs:
   istio:
@@ -57,39 +58,100 @@ jobs:
       - name: Check inputs
         run: |
           set -euo pipefail
-          if ! [[ "$ISTIO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version must look like 1.31.2"; exit 1
+          V="${ISTIO_VERSION//[[:space:]]/}"
+          NS="${INJECT_NS//[[:space:]]/}"
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 1.31.2 (got '$ISTIO_VERSION')"; exit 1
           fi
-          if [ -n "$INJECT_NS" ] && ! [[ "$INJECT_NS" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
-            echo "::error::inject_namespace is not a valid namespace name"; exit 1
+          if [ -n "$NS" ]; then
+            if [ "${#NS}" -gt 63 ] || ! [[ "$NS" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+              echo "::error::inject_namespace '$INJECT_NS' is not a valid namespace name (lowercase letters, digits and dashes only)"; exit 1
+            fi
           fi
+          # Use the cleaned values (no stray spaces) in the later steps
+          { echo "ISTIO_VERSION=$V"; echo "INJECT_NS=$NS"; } >> "$GITHUB_ENV"
 
-      - uses: azure/setup-helm@v5
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
 
-      - name: Add the Istio chart repo
-        run: |
-          helm repo add istio "$ISTIO_REPO"
-          helm repo update
+      - name: Show Helm version
+        run: helm version
 
-      - name: Validate charts and manifests
+      - name: Add Helm repositories
         run: |
           set -euo pipefail
-          helm template istio-base istio/base --version "$ISTIO_VERSION" --namespace istio-system > /dev/null
-          helm template istiod istio/istiod --version "$ISTIO_VERSION" --namespace istio-system -f istio/istiod-values.yaml > /dev/null
-          helm template istio-ingress istio/gateway --version "$ISTIO_VERSION" --namespace istio-ingress -f istio/gateway-values.yaml > /dev/null
-          pip install --quiet pyyaml
+          FILE=helm/repos.txt
+          if [ ! -f "$FILE" ]; then
+            echo "::error::$FILE not found"; exit 1
+          fi
+          COUNT=0
+          while read -r name url extra; do
+            case "$name" in ''|'#'*) continue ;; esac
+            if [ -z "$url" ] || [ -n "$extra" ]; then
+              echo "::error::Bad line in $FILE for '$name': expected '<name> <https-url>'"; exit 1
+            fi
+            case "$url" in
+              https://*) ;;
+              *) echo "::error::Repository '$name' must use an https:// URL"; exit 1 ;;
+            esac
+            helm repo add "$name" "$url" --force-update
+            COUNT=$((COUNT + 1))
+          done < "$FILE"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "::error::No repositories found in $FILE"; exit 1
+          fi
+          helm repo update
+
+      - name: Check the Istio chart version exists
+        run: |
+          set -euo pipefail
+          for c in base istiod gateway; do
+            OUT="$(helm search repo "istio/$c" --version "$ISTIO_VERSION" || true)"
+            if ! grep -q "^istio/$c[[:space:]]" <<< "$OUT"; then
+              echo "::error::Chart istio/$c $ISTIO_VERSION was not found in the istio repository. Newest available:"
+              helm search repo "istio/$c" --versions | sed -n '1,6p'
+              exit 1
+            fi
+            echo "Found istio/$c $ISTIO_VERSION"
+          done
+
+      - name: Render istio-base
+        run: helm template istio-base istio/base --version "$ISTIO_VERSION" --namespace istio-system > /dev/null
+
+      - name: Render istiod
+        run: helm template istiod istio/istiod --version "$ISTIO_VERSION" --namespace istio-system -f istio/istiod-values.yaml > /dev/null
+
+      - name: Render ingress gateway
+        run: helm template istio-ingress istio/gateway --version "$ISTIO_VERSION" --namespace istio-ingress -f istio/gateway-values.yaml > /dev/null
+
+      - name: Check Istio manifests
+        run: |
+          set -euo pipefail
           python3 - <<'EOF'
-          import glob, sys, yaml
+          import glob, re, sys
+          try:
+              import yaml
+          except ImportError:
+              yaml = None
           files = sorted(glob.glob("istio/manifests/*.y*ml"))
           if not files:
               sys.exit("No manifests found under istio/manifests/")
           for f in files:
-              with open(f) as fh:
-                  docs = [d for d in yaml.safe_load_all(fh) if d]
-              for d in docs:
-                  for key in ("apiVersion", "kind", "metadata"):
-                      if key not in d:
-                          sys.exit(f"{f}: missing {key}")
+              text = open(f).read()
+              if yaml:
+                  docs = [d for d in yaml.safe_load_all(text) if d]
+                  for d in docs:
+                      for key in ("apiVersion", "kind", "metadata"):
+                          if key not in d:
+                              sys.exit(f"{f}: missing {key}")
+              else:
+                  docs = [p for p in re.split(r"^---\s*$", text, flags=re.M) if re.search(r"^\w", p, re.M)]
+                  for p in docs:
+                      for key in ("apiVersion", "kind", "metadata"):
+                          if not re.search(rf"^{key}:", p, re.M):
+                              sys.exit(f"{f}: missing {key}")
               print(f"{f}: {len(docs)} document(s) OK")
           EOF
 
@@ -157,7 +219,7 @@ jobs:
           helm upgrade --install istio-base istio/base \
             --version "$ISTIO_VERSION" \
             --namespace istio-system --create-namespace \
-            --atomic --timeout 5m
+            --rollback-on-failure --timeout 5m
 
       - name: Install istiod (control plane)
         if: inputs.action == 'install'
@@ -166,7 +228,7 @@ jobs:
             --version "$ISTIO_VERSION" \
             --namespace istio-system \
             -f istio/istiod-values.yaml \
-            --atomic --timeout 10m
+            --rollback-on-failure --timeout 10m
           kubectl -n istio-system rollout status deployment/istiod --timeout=5m
 
       - name: Install the ingress gateway
@@ -176,14 +238,14 @@ jobs:
             --version "$ISTIO_VERSION" \
             --namespace istio-ingress --create-namespace \
             -f istio/gateway-values.yaml \
-            --atomic --timeout 5m
+            --rollback-on-failure --timeout 5m
 
       - name: Apply Istio manifests
         if: inputs.action == 'install'
         run: kubectl apply -f istio/manifests/
 
       - name: Enable sidecar injection
-        if: inputs.action == 'install' && inputs.inject_namespace != ''
+        if: inputs.action == 'install' && env.INJECT_NS != ''
         run: |
           set -euo pipefail
           case "$INJECT_NS" in
