@@ -1,0 +1,33 @@
+# Helm values for the istiod (control plane) chart: istio/istiod
+#
+# Tuned for the small dev cluster (spot t3.small nodes, 2 GiB RAM each).
+# The chart defaults request 2 GiB of memory for istiod, which would not
+# schedule on these nodes, so the requests below are much smaller.
+
+pilot:
+  # One replica, no autoscaler: this is a dev cluster that is often scaled to 0.
+  autoscaleEnabled: false
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+global:
+  proxy:
+    # Resources for every injected sidecar.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+
+meshConfig:
+  # Envoy access logs to stdout, readable with kubectl logs.
+  accessLogFile: /dev/stdout
+  defaultConfig:
+    # Start the app container only after the sidecar is ready.
+    holdApplicationUntilProxyStarts: true

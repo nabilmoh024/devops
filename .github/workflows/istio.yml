@@ -1,0 +1,243 @@
+name: Istio Deploy
+
+# Manual install / upgrade / removal of Istio on the EKS cluster, using the
+# official Helm charts and the config under istio/.
+# validate never touches AWS. The other actions add this runner's IP to the
+# cluster API allow-list and always restore the original list at the end.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        options:
+          - validate
+          - install
+          - status
+          - uninstall
+        default: validate
+      version:
+        description: Istio version (change it to upgrade)
+        type: string
+        default: "1.31.2"
+      install_gateway:
+        description: Also install the ingress gateway
+        type: boolean
+        default: false
+      inject_namespace:
+        description: Optional namespace to label istio-injection=enabled
+        type: string
+        default: ""
+
+permissions:
+  contents: read # required for checkout
+
+# Same group as terraform.yml (eks / dev): an Istio run never changes the
+# cluster at the same time as a Terraform, Helm or scale run.
+concurrency:
+  group: terraform-eks-dev
+  cancel-in-progress: false
+
+env:
+  CLUSTER: devops-dev-eks
+  ISTIO_VERSION: ${{ inputs.version }}
+  INSTALL_GATEWAY: ${{ inputs.install_gateway }}
+  INJECT_NS: ${{ inputs.inject_namespace }}
+  ISTIO_REPO: https://istio-release.storage.googleapis.com/charts
+
+jobs:
+  istio:
+    name: ${{ inputs.action }} istio ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check inputs
+        run: |
+          set -euo pipefail
+          if ! [[ "$ISTIO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 1.31.2"; exit 1
+          fi
+          if [ -n "$INJECT_NS" ] && ! [[ "$INJECT_NS" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+            echo "::error::inject_namespace is not a valid namespace name"; exit 1
+          fi
+
+      - uses: azure/setup-helm@v5
+
+      - name: Add the Istio chart repo
+        run: |
+          helm repo add istio "$ISTIO_REPO"
+          helm repo update
+
+      - name: Validate charts and manifests
+        run: |
+          set -euo pipefail
+          helm template istio-base istio/base --version "$ISTIO_VERSION" --namespace istio-system > /dev/null
+          helm template istiod istio/istiod --version "$ISTIO_VERSION" --namespace istio-system -f istio/istiod-values.yaml > /dev/null
+          helm template istio-ingress istio/gateway --version "$ISTIO_VERSION" --namespace istio-ingress -f istio/gateway-values.yaml > /dev/null
+          pip install --quiet pyyaml
+          python3 - <<'EOF'
+          import glob, sys, yaml
+          files = sorted(glob.glob("istio/manifests/*.y*ml"))
+          if not files:
+              sys.exit("No manifests found under istio/manifests/")
+          for f in files:
+              with open(f) as fh:
+                  docs = [d for d in yaml.safe_load_all(fh) if d]
+              for d in docs:
+                  for key in ("apiVersion", "kind", "metadata"):
+                      if key not in d:
+                          sys.exit(f"{f}: missing {key}")
+              print(f"{f}: {len(docs)} document(s) OK")
+          EOF
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        if: inputs.action != 'validate'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Allow this runner to reach the EKS API
+        if: inputs.action != 'validate'
+        run: |
+          set -euo pipefail
+          wait_update() {
+            local s
+            for _ in $(seq 1 60); do
+              s="$(aws eks describe-update --name "$CLUSTER" --update-id "$1" --query 'update.status' --output text)"
+              case "$s" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "::error::Cluster update $s"; return 1 ;;
+              esac
+              sleep 15
+            done
+            echo "::error::Timed out waiting for the cluster update"; return 1
+          }
+          MYIP="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')/32"
+          ORIG="$(aws eks describe-cluster --name "$CLUSTER" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output text | tr '\t' ',')"
+          for c in ${ORIG//,/ }; do echo "::add-mask::$c"; done
+          echo "ORIG_CIDRS=$ORIG" >> "$GITHUB_ENV"
+          case ",$ORIG," in
+            *",$MYIP,"*|*",0.0.0.0/0,"*) echo "Runner already allowed, no change needed" ;;
+            *)
+              UPD="$(aws eks update-cluster-config --name "$CLUSTER" --resources-vpc-config "publicAccessCidrs=$ORIG,$MYIP" --query 'update.id' --output text)"
+              wait_update "$UPD"
+              ;;
+          esac
+
+      - name: Connect to the cluster
+        if: inputs.action != 'validate'
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER" > /dev/null
+          for i in $(seq 1 12); do
+            if helm list --namespace kube-system > /dev/null 2>&1; then
+              echo "Cluster API reachable"; exit 0
+            fi
+            echo "Waiting for the API (attempt $i)"; sleep 10
+          done
+          echo "::error::Could not reach the EKS API"; exit 1
+
+      - name: Check the cluster has nodes
+        if: inputs.action == 'install'
+        run: |
+          set -euo pipefail
+          READY="$(kubectl get nodes --no-headers | awk '$2 == "Ready"' | wc -l)"
+          echo "Ready nodes: $READY"
+          if [ "$READY" -lt 1 ]; then
+            echo "::error::No Ready nodes. Run the EKS Scale Nodes workflow first (1 or 2 nodes), then run this again."
+            exit 1
+          fi
+
+      - name: Install istio-base (CRDs)
+        if: inputs.action == 'install'
+        run: |
+          helm upgrade --install istio-base istio/base \
+            --version "$ISTIO_VERSION" \
+            --namespace istio-system --create-namespace \
+            --atomic --timeout 5m
+
+      - name: Install istiod (control plane)
+        if: inputs.action == 'install'
+        run: |
+          helm upgrade --install istiod istio/istiod \
+            --version "$ISTIO_VERSION" \
+            --namespace istio-system \
+            -f istio/istiod-values.yaml \
+            --atomic --timeout 10m
+          kubectl -n istio-system rollout status deployment/istiod --timeout=5m
+
+      - name: Install the ingress gateway
+        if: inputs.action == 'install' && inputs.install_gateway
+        run: |
+          helm upgrade --install istio-ingress istio/gateway \
+            --version "$ISTIO_VERSION" \
+            --namespace istio-ingress --create-namespace \
+            -f istio/gateway-values.yaml \
+            --atomic --timeout 5m
+
+      - name: Apply Istio manifests
+        if: inputs.action == 'install'
+        run: kubectl apply -f istio/manifests/
+
+      - name: Enable sidecar injection
+        if: inputs.action == 'install' && inputs.inject_namespace != ''
+        run: |
+          set -euo pipefail
+          case "$INJECT_NS" in
+            kube-system|kube-public|kube-node-lease|istio-system)
+              echo "::error::Refusing to enable injection in $INJECT_NS"; exit 1 ;;
+          esac
+          kubectl create namespace "$INJECT_NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace "$INJECT_NS" istio-injection=enabled --overwrite
+          echo "Only pods created from now on get a sidecar. For existing workloads run: kubectl rollout restart deployment -n $INJECT_NS"
+
+      - name: Uninstall Istio
+        if: inputs.action == 'uninstall'
+        run: |
+          set -euo pipefail
+          kubectl delete -f istio/manifests/ --ignore-not-found
+          for r in istio-ingress:istio-ingress istiod:istio-system istio-base:istio-system; do
+            name="${r%%:*}"; ns="${r##*:}"
+            if helm status "$name" --namespace "$ns" > /dev/null 2>&1; then
+              helm uninstall "$name" --namespace "$ns"
+            else
+              echo "$name is not installed, skipping"
+            fi
+          done
+          echo "The *.istio.io CRDs are not removed by Helm and stay in the cluster."
+
+      - name: Show Istio status
+        if: inputs.action != 'validate'
+        run: |
+          helm list --all-namespaces | grep -E 'NAME|istio' || true
+          kubectl get pods --namespace istio-system || true
+          kubectl get pods --namespace istio-ingress || true
+
+      - name: Restore the original API allow-list
+        if: always() && env.ORIG_CIDRS != ''
+        run: |
+          set -euo pipefail
+          wait_update() {
+            local s
+            for _ in $(seq 1 60); do
+              s="$(aws eks describe-update --name "$CLUSTER" --update-id "$1" --query 'update.status' --output text)"
+              case "$s" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "::error::Cluster update $s"; return 1 ;;
+              esac
+              sleep 15
+            done
+            echo "::error::Timed out waiting for the cluster update"; return 1
+          }
+          norm() { tr ',' '\n' | sort | paste -sd, -; }
+          CUR="$(aws eks describe-cluster --name "$CLUSTER" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output text | tr '\t' ',' | norm)"
+          WANT="$(printf '%s' "$ORIG_CIDRS" | norm)"
+          if [ "$CUR" = "$WANT" ]; then
+            echo "Allow-list already original"; exit 0
+          fi
+          UPD="$(aws eks update-cluster-config --name "$CLUSTER" --resources-vpc-config "publicAccessCidrs=$ORIG_CIDRS" --query 'update.id' --output text)"
+          wait_update "$UPD"
+          echo "Allow-list restored"

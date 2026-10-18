@@ -1,0 +1,14 @@
+# Mesh-wide mTLS policy. Applied by the Istio workflow after istiod is ready.
+# A PeerAuthentication in the root namespace (istio-system) applies to the
+# whole mesh.
+#
+# PERMISSIVE accepts both mTLS and plain traffic, so services without a
+# sidecar keep working. Change to STRICT once every workload is in the mesh.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: PERMISSIVE

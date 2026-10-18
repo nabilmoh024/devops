@@ -1,0 +1,28 @@
+# Helm values for the ingress gateway chart: istio/gateway
+# Only installed when the workflow input "install_gateway" is true.
+
+# ClusterIP means no AWS load balancer is created (no extra cost). Reach the
+# gateway with: kubectl -n istio-ingress port-forward svc/istio-ingress 8080:80
+#
+# To expose it publicly, switch to a load balancer. The EKS cluster in this
+# repo has no AWS Load Balancer Controller, so the built-in provisioning is
+# used. Example for an internet-facing NLB (needs public subnets):
+#
+# service:
+#   type: LoadBalancer
+#   annotations:
+#     service.beta.kubernetes.io/aws-load-balancer-type: nlb
+#     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+service:
+  type: ClusterIP
+
+autoscaling:
+  enabled: false
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
