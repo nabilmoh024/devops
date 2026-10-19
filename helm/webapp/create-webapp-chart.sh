@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Run from the repo root (the folder that contains helm/). Creates helm/webapp/.
 set -euo pipefail
-cd "$(dirname "$0")" 2>/dev/null || true
 [ -d helm ] || { echo "Run this from the repo root: helm/ folder not found"; exit 1; }
 mkdir -p helm/webapp/templates
 cat > helm/webapp/Chart.yaml <<'WEBAPP_EOF'
