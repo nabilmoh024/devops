@@ -24,11 +24,16 @@ on:
         type: choice
         options:
           - test-release
+          - webapp
         default: test-release
       namespace:
         description: Kubernetes namespace for the release (ignored by repos)
         type: string
         default: test
+      values_file:
+        description: Optional values file inside the chart folder (for example values-internet.yaml)
+        type: string
+        default: ""
 
 permissions:
   contents: read # required for checkout
@@ -44,6 +49,7 @@ env:
   HELM_VERSION: v4.3.1
   CHART: ${{ inputs.chart }}
   NAMESPACE: ${{ inputs.namespace }}
+  VALUES_FILE: ${{ inputs.values_file }}
 
 jobs:
   helm:
@@ -104,11 +110,11 @@ jobs:
 
       - name: Lint chart
         if: inputs.action != 'repos'
-        run: helm lint "helm/$CHART"
+        run: helm lint "helm/$CHART" ${VALUES_FILE:+-f "helm/$CHART/$VALUES_FILE"}
 
       - name: Render chart
         if: inputs.action == 'template'
-        run: helm template "$CHART" "helm/$CHART" --namespace "$NAMESPACE"
+        run: helm template "$CHART" "helm/$CHART" --namespace "$NAMESPACE" ${VALUES_FILE:+-f "helm/$CHART/$VALUES_FILE"}
 
       - uses: aws-actions/configure-aws-credentials@v6
         if: inputs.action == 'upgrade-install' || inputs.action == 'uninstall'
@@ -160,7 +166,7 @@ jobs:
       - name: Helm upgrade --install
         if: inputs.action == 'upgrade-install'
         run: |
-          helm upgrade --install "$CHART" "helm/$CHART" --namespace "$NAMESPACE" --create-namespace --rollback-on-failure --timeout 5m
+          helm upgrade --install "$CHART" "helm/$CHART" --namespace "$NAMESPACE" --create-namespace --rollback-on-failure --timeout 5m ${VALUES_FILE:+-f "helm/$CHART/$VALUES_FILE"}
           helm status "$CHART" --namespace "$NAMESPACE"
 
       - name: Helm uninstall

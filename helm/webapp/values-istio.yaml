@@ -1,0 +1,5 @@
+# Phase 2: Service stays internal, Istio ingress gateway fronts it
+service:
+  type: ClusterIP
+istio:
+  enabled: true

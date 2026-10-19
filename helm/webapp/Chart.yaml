@@ -1,0 +1,6 @@
+apiVersion: v2
+name: webapp
+description: Small static web application (nginx) with optional internet exposure and optional Istio Gateway/VirtualService
+type: application
+version: 0.1.0
+appVersion: "1.27"
