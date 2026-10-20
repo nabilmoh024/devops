@@ -1,0 +1,6 @@
+# Phase 1: internet-facing NLB straight to the Service (no Istio)
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing

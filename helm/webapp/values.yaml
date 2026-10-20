@@ -1,0 +1,38 @@
+replicaCount: 1
+
+image:
+  repository: nginxinc/nginx-unprivileged   # runs as non-root, listens on 8080
+  tag: "1.27-alpine"
+  pullPolicy: IfNotPresent
+
+# Page served by the app. Replace with your own HTML or mount real content.
+content:
+  title: "webapp on devops-dev-eks"
+  body: "Helm deployment works. Served by nginx."
+
+service:
+  # ClusterIP  -> in-cluster only (use this when Istio fronts the app)
+  # LoadBalancer -> internet-facing NLB straight to the Service (no Istio needed)
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# Optional Istio resources. Leave off until Istio is ready.
+istio:
+  enabled: false
+  hosts: ["*"]              # replace with your DNS name when you have one
+  gatewaySelector:
+    istio: ingress          # label on the pods of the istio/gateway release
+  httpPort: 80
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
