@@ -27,7 +27,7 @@ module "vpc" {
   azs             = local.azs
   private_subnets = var.private_subnet_cidrs
   public_subnets  = var.public_subnet_cidrs
-  
+
   # Kubernetes load balancer discovery: internet-facing NLB/ALB use the public
   # subnets, internal ones use the private subnets. Needed because the cluster
   # has no AWS Load Balancer Controller and relies on built-in provisioning.
