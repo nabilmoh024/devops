@@ -1,0 +1,143 @@
+
+name: Deploy Grafana to EKS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: grafana-dev-deployment
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  EKS_CLUSTER: devops-dev-eks
+  NAMESPACE: default
+  RELEASE_NAME: my-release
+  CHART_PATH: helmlearn/grafana
+  STORAGECLASS_FILE: helmlearn/grafana/gp3-storageclass.yaml
+  GRAFANA_IMAGE: docker.io/bitnamilegacy/grafana:12.1.1-debian-12-r1
+
+jobs:
+  deploy-grafana:
+    name: Deploy Grafana
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Configure EKS kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "$EKS_CLUSTER" \
+            --region "$AWS_REGION"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Verify Kubernetes connectivity
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Verify EBS CSI driver
+        run: |
+          kubectl get csidriver ebs.csi.aws.com
+
+          aws eks describe-addon \
+            --cluster-name "$EKS_CLUSTER" \
+            --addon-name aws-ebs-csi-driver \
+            --region "$AWS_REGION" \
+            --query 'addon.status'
+
+      - name: Apply gp3 StorageClass
+        run: |
+          kubectl apply -f "$STORAGECLASS_FILE"
+          kubectl get storageclass gp3
+
+      - name: Validate local Helm chart
+        run: |
+          test -f "$CHART_PATH/Chart.yaml"
+          test -f "$CHART_PATH/values.yaml"
+
+          helm lint "$CHART_PATH" \
+            -f "$CHART_PATH/values.yaml"
+
+      - name: Render and verify Grafana image
+        run: |
+          helm template "$RELEASE_NAME" "$CHART_PATH" \
+            --namespace "$NAMESPACE" \
+            -f "$CHART_PATH/values.yaml" \
+            --set image.registry=docker.io \
+            --set image.repository=bitnamilegacy/grafana \
+            --set image.tag=12.1.1-debian-12-r1 \
+            --set global.security.allowInsecureImages=true \
+            > /tmp/grafana-rendered.yaml
+
+          grep -F "$GRAFANA_IMAGE" \
+            /tmp/grafana-rendered.yaml
+
+      - name: Deploy Grafana using Helm
+        run: |
+          helm upgrade --install "$RELEASE_NAME" "$CHART_PATH" \
+            --namespace "$NAMESPACE" \
+            -f "$CHART_PATH/values.yaml" \
+            --set image.registry=docker.io \
+            --set image.repository=bitnamilegacy/grafana \
+            --set image.tag=12.1.1-debian-12-r1 \
+            --set global.security.allowInsecureImages=true \
+            --wait \
+            --timeout 10m
+
+      - name: Verify Grafana rollout
+        run: |
+          kubectl rollout status \
+            deployment/"$RELEASE_NAME"-grafana \
+            --namespace "$NAMESPACE" \
+            --timeout=180s
+
+          kubectl wait \
+            --for=jsonpath='{.status.phase}'=Bound \
+            pvc/"$RELEASE_NAME"-grafana \
+            --namespace "$NAMESPACE" \
+            --timeout=120s
+
+      - name: Display deployment status
+        if: always()
+        run: |
+          echo "=== Helm release ==="
+          helm status "$RELEASE_NAME" \
+            -n "$NAMESPACE" || true
+
+          echo "=== Grafana pods ==="
+          kubectl get pods \
+            -n "$NAMESPACE" \
+            -o wide || true
+
+          echo "=== PersistentVolumeClaims ==="
+          kubectl get pvc \
+            -n "$NAMESPACE" || true
+
+          echo "=== PersistentVolumes ==="
+          kubectl get pv || true
+
+          echo "=== Grafana service ==="
+          kubectl get svc \
+            "$RELEASE_NAME"-grafana \
+            -n "$NAMESPACE" || true
