@@ -1,0 +1,14 @@
+# Generated Helm artifacts
+*.tgz
+nginx-rendered.yaml
+
+# Diagnostic logs
+crane-debug.log
+*.log
+
+# Local credentials
+.docker/
+config.json
+.env
+.env.*
+/nginx/

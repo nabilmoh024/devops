@@ -1,0 +1,14 @@
+service:
+  type: ClusterIP
+
+image:
+  registry: trialbot.jfrog.io
+  repository: docker-eks-poc-local/nginx
+  tag: "1.31.8-poc"
+  digest: "sha256:c52088398fd6d80b2ea59c0421220e4af98329e4696be08a6a78e0b91b7876a3"
+  pullSecrets:
+    - jfrog-registry-secret
+
+global:
+  security:
+    allowInsecureImages: true

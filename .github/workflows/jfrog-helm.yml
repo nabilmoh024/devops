@@ -1,0 +1,447 @@
+
+name: JFrog Helm Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Select Helm operation"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - uninstall
+        default: deploy
+
+permissions:
+  contents: read
+
+# Share concurrency with existing Terraform EKS Dev workflows.
+concurrency:
+  group: terraform-eks-dev
+  cancel-in-progress: false
+
+env:
+  CLUSTER: devops-dev-eks
+  NAMESPACE: jfrog-poc
+  RELEASE: nginx-poc
+  HELM_VERSION: v4.3.1
+  JFROG_REGISTRY: trialbot.jfrog.io
+  CHART: oci://trialbot.jfrog.io/helm-eks-poc-local/nginx
+  CHART_VERSION: "25.2.10"
+  VALUES_FILE: helmingnx/values-poc.yaml
+  IMAGE_PULL_SECRET: jfrog-registry-secret
+  AWS_REGION: ${{ vars.AWS_REGION }}
+
+jobs:
+  jfrog-helm:
+    name: JFrog Helm ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # 2. Install Helm on GitHub runner
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      # 3. Verify Helm
+      - name: Verify Helm installation
+        run: helm version --short
+
+      # 4. Configure AWS authentication
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 5. Verify AWS identity and cluster
+      - name: Verify AWS and EKS
+        run: |
+          set -euo pipefail
+
+          aws sts get-caller-identity \
+            --query '{Account:Account,Arn:Arn}' \
+            --output json
+
+          aws eks describe-cluster \
+            --name "$CLUSTER" \
+            --query 'cluster.status' \
+            --output text
+
+      # 6. Temporarily allow runner IP to access EKS API
+      - name: Allow GitHub runner to access EKS API
+        run: |
+          set -euo pipefail
+
+          wait_update() {
+            local status
+
+            for i in $(seq 1 60); do
+              status="$(aws eks describe-update \
+                --name "$CLUSTER" \
+                --update-id "$1" \
+                --query 'update.status' \
+                --output text)"
+
+              case "$status" in
+                Successful)
+                  return 0
+                  ;;
+                Failed|Cancelled)
+                  echo "::error::EKS update $status"
+                  return 1
+                  ;;
+              esac
+
+              sleep 15
+            done
+
+            echo "::error::EKS update timed out"
+            return 1
+          }
+
+          RUNNER_IP="$(curl -fsS \
+            https://checkip.amazonaws.com \
+            | tr -d '[:space:]')/32"
+
+          ORIGINAL_CIDRS="$(aws eks describe-cluster \
+            --name "$CLUSTER" \
+            --query 'cluster.resourcesVpcConfig.publicAccessCidrs' \
+            --output text | tr '\t' ',')"
+
+          if [ -z "$ORIGINAL_CIDRS" ] || \
+             [ "$ORIGINAL_CIDRS" = "None" ]; then
+            echo "::error::Cannot determine original EKS CIDRs"
+            exit 1
+          fi
+
+          echo "ORIGINAL_CIDRS=$ORIGINAL_CIDRS" >> "$GITHUB_ENV"
+
+          # Prevent original CIDRs from appearing in logs
+          for cidr in ${ORIGINAL_CIDRS//,/ }; do
+            echo "::add-mask::$cidr"
+          done
+
+          case ",$ORIGINAL_CIDRS," in
+            *",$RUNNER_IP,"*|*",0.0.0.0/0,"*)
+              echo "Runner already permitted"
+              ;;
+            *)
+              UPDATE_ID="$(aws eks update-cluster-config \
+                --name "$CLUSTER" \
+                --resources-vpc-config \
+                "publicAccessCidrs=$ORIGINAL_CIDRS,$RUNNER_IP" \
+                --query 'update.id' \
+                --output text)"
+
+              wait_update "$UPDATE_ID"
+              ;;
+          esac
+
+      # 7. Configure kubeconfig
+      - name: Configure EKS kubeconfig
+        run: |
+          set -euo pipefail
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$CLUSTER"
+
+      # 8. Verify Kubernetes API access
+      - name: Verify Kubernetes connectivity
+        run: |
+          set -euo pipefail
+
+          for i in $(seq 1 12); do
+            if kubectl get namespace kube-system \
+              > /dev/null 2>&1; then
+              echo "EKS API reachable"
+              kubectl get nodes
+              exit 0
+            fi
+
+            echo "Waiting for EKS API: attempt $i"
+            sleep 10
+          done
+
+          echo "::error::EKS API unreachable"
+          exit 1
+
+      # 9. Authenticate Helm to JFrog for deployment
+      - name: Login to JFrog Helm OCI registry
+        if: inputs.action == 'deploy'
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          test -n "$JFROG_USERNAME"
+          test -n "$JFROG_ACCESS_TOKEN"
+
+          printf '%s' "$JFROG_ACCESS_TOKEN" | \
+            helm registry login "$JFROG_REGISTRY" \
+              --username "$JFROG_USERNAME" \
+              --password-stdin
+
+      # 10. Verify Helm chart in JFrog
+      - name: Verify JFrog Helm chart
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+
+          helm show chart "$CHART" \
+            --version "$CHART_VERSION"
+
+      # 11. Validate chart with POC values
+      - name: Validate Helm chart
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+
+          test -f "$VALUES_FILE"
+
+          helm pull "$CHART" \
+            --version "$CHART_VERSION" \
+            --untar \
+            --untardir "$RUNNER_TEMP"
+
+          helm lint "$RUNNER_TEMP/nginx" \
+            -f "$VALUES_FILE"
+
+          helm template "$RELEASE" \
+            "$RUNNER_TEMP/nginx" \
+            --namespace "$NAMESPACE" \
+            -f "$VALUES_FILE" \
+            > "$RUNNER_TEMP/nginx-rendered.yaml"
+
+          # Prevent accidentally provisioning an AWS LB
+          if grep -Eq 'type: LoadBalancer' \
+            "$RUNNER_TEMP/nginx-rendered.yaml"; then
+            echo "::error::LoadBalancer detected"
+            exit 1
+          fi
+
+          echo "Helm validation passed"
+
+      # 12. Create namespace if missing
+      - name: Ensure Kubernetes namespace exists
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+
+          kubectl create namespace "$NAMESPACE" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # 13. Create or update JFrog image pull Secret
+      - name: Configure JFrog image pull Secret
+        if: inputs.action == 'deploy'
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          test -n "$JFROG_USERNAME"
+          test -n "$JFROG_ACCESS_TOKEN"
+
+          # Generate Docker authentication JSON without
+          # printing the token or passing it as a CLI argument.
+          umask 077
+          AUTH_FILE="$(mktemp)"
+          trap 'rm -f "$AUTH_FILE"' EXIT
+
+          export AUTH_FILE
+
+          python3 - <<'PY'
+          import os
+          import json
+          import base64
+
+          registry = os.environ["JFROG_REGISTRY"]
+          username = os.environ["JFROG_USERNAME"]
+          token = os.environ["JFROG_ACCESS_TOKEN"]
+
+          credentials = base64.b64encode(
+              f"{username}:{token}".encode()
+          ).decode()
+
+          config = {
+              "auths": {
+                  registry: {
+                      "auth": credentials
+                  }
+              }
+          }
+
+          with open(os.environ["AUTH_FILE"], "w") as file:
+              json.dump(config, file)
+          PY
+
+          kubectl create secret generic \
+            "$IMAGE_PULL_SECRET" \
+            --namespace "$NAMESPACE" \
+            --type=kubernetes.io/dockerconfigjson \
+            --from-file=.dockerconfigjson="$AUTH_FILE" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "JFrog image pull Secret configured"
+
+      # 14. Deploy NGINX from JFrog OCI
+      - name: Deploy NGINX using Helm
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+
+          helm upgrade --install "$RELEASE" "$CHART" \
+            --version "$CHART_VERSION" \
+            --namespace "$NAMESPACE" \
+            --create-namespace \
+            --values "$VALUES_FILE" \
+            --rollback-on-failure \
+            --timeout 5m
+
+          helm status "$RELEASE" \
+            --namespace "$NAMESPACE"
+
+      # 15. Verify deployment
+      - name: Verify NGINX deployment
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+
+          kubectl rollout status \
+            deployment/"$RELEASE" \
+            --namespace "$NAMESPACE" \
+            --timeout=180s
+
+          kubectl get pods \
+            --namespace "$NAMESPACE" \
+            -o wide
+
+          kubectl get services \
+            --namespace "$NAMESPACE"
+
+          kubectl get deployment "$RELEASE" \
+            --namespace "$NAMESPACE" \
+            -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
+
+      # 16. Uninstall Helm release
+      - name: Uninstall NGINX
+        if: inputs.action == 'uninstall'
+        run: |
+          set -euo pipefail
+
+          if helm status "$RELEASE" \
+            --namespace "$NAMESPACE" \
+            > /dev/null 2>&1; then
+
+            helm uninstall "$RELEASE" \
+              --namespace "$NAMESPACE" \
+              --wait \
+              --timeout 5m
+
+            echo "NGINX release uninstalled"
+          else
+            echo "NGINX release not found; nothing to uninstall"
+          fi
+
+      # 17. Display release status
+      - name: Show Helm releases
+        if: success()
+        run: |
+          if kubectl get namespace "$NAMESPACE" \
+            > /dev/null 2>&1; then
+            helm list --namespace "$NAMESPACE"
+          else
+            echo "Namespace does not exist"
+          fi
+
+      # 18. Always restore original EKS API allow-list
+      - name: Restore original EKS API allow-list
+        if: always() && env.ORIGINAL_CIDRS != ''
+        run: |
+          set -euo pipefail
+
+          wait_update() {
+            local status
+
+            for i in $(seq 1 60); do
+              status="$(aws eks describe-update \
+                --name "$CLUSTER" \
+                --update-id "$1" \
+                --query 'update.status' \
+                --output text)"
+
+              case "$status" in
+                Successful)
+                  return 0
+                  ;;
+                Failed|Cancelled)
+                  echo "::error::EKS update $status"
+                  return 1
+                  ;;
+              esac
+
+              sleep 15
+            done
+
+            echo "::error::EKS update timed out"
+            return 1
+          }
+
+          normalize() {
+            tr ',' '\n' | sort | paste -sd, -
+          }
+
+          # Wait for any previous EKS configuration update
+          # to finish before attempting restoration.
+          for i in $(seq 1 60); do
+            STATE="$(aws eks describe-cluster \
+              --name "$CLUSTER" \
+              --query 'cluster.status' \
+              --output text)"
+
+            if [ "$STATE" = "ACTIVE" ]; then
+              break
+            fi
+
+            if [ "$i" -eq 60 ]; then
+              echo "::error::Cluster not ACTIVE for restoration"
+              exit 1
+            fi
+
+            sleep 15
+          done
+
+          CURRENT="$(aws eks describe-cluster \
+            --name "$CLUSTER" \
+            --query 'cluster.resourcesVpcConfig.publicAccessCidrs' \
+            --output text | tr '\t' ',' | normalize)"
+
+          ORIGINAL="$(printf '%s' "$ORIGINAL_CIDRS" \
+            | normalize)"
+
+          if [ "$CURRENT" = "$ORIGINAL" ]; then
+            echo "EKS API allow-list already restored"
+            exit 0
+          fi
+
+          UPDATE_ID="$(aws eks update-cluster-config \
+            --name "$CLUSTER" \
+            --resources-vpc-config \
+            "publicAccessCidrs=$ORIGINAL_CIDRS" \
+            --query 'update.id' \
+            --output text)"
+
+          wait_update "$UPDATE_ID"
+
+          echo "Original EKS API allow-list restored"
