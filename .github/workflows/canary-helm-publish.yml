@@ -103,6 +103,7 @@ jobs:
 
           helm show chart "$CHART_URI" \
             --version "$CHART_VERSION" > /dev/null
+            # test
 
           {
             echo "## Helm Chart Published"
