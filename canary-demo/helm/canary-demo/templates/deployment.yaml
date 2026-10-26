@@ -1,0 +1,55 @@
+{{- $root := . }}
+{{- range $version, $config := .Values.versions }}
+{{- if $config.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "canary-demo.fullname" $root }}-{{ $version }}
+  labels:
+    {{- include "canary-demo.labels" $root | nindent 4 }}
+    version: {{ $version | quote }}
+spec:
+  replicas: {{ $config.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "canary-demo.selectorLabels" $root | nindent 6 }}
+      version: {{ $version | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "canary-demo.selectorLabels" $root | nindent 8 }}
+        version: {{ $version | quote }}
+      {{- with $root.Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "canary-demo.serviceAccountName" $root }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: canary-demo
+          image: "{{ $root.Values.image.registry }}/{{ $root.Values.image.repository }}:{{ $config.tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $root.Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: APP_VERSION
+              value: {{ $config.appVersion | quote }}
+          livenessProbe:
+            {{- toYaml $root.Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml $root.Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml $root.Values.resources | nindent 12 }}
+{{- end }}
+{{- end }}
