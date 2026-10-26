@@ -1,0 +1,117 @@
+
+name: Canary Helm Package and Publish
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-helm-publish
+  cancel-in-progress: false
+
+env:
+  HELM_VERSION: v4.3.1
+  CHART_PATH: canary-demo/helm/canary-demo
+  CHART_NAME: canary-demo
+  JFROG_REGISTRY: trialbot.jfrog.io
+  JFROG_HELM_REPO: helm-canary-poc-local
+
+jobs:
+  helm-publish:
+    name: Package and publish Helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Verify Helm
+        run: helm version --short
+
+      - name: Validate Helm chart
+        run: |
+          set -euo pipefail
+
+          helm lint "$CHART_PATH"
+
+          helm template canary-demo "$CHART_PATH" \
+            --namespace canary-demo \
+            > "$RUNNER_TEMP/canary-rendered.yaml"
+
+          echo "Helm validation passed"
+
+      - name: Read chart version
+        run: |
+          set -euo pipefail
+
+          CHART_VERSION="$(helm show chart "$CHART_PATH" \
+            | awk '/^version:/ {print $2}')"
+
+          test -n "$CHART_VERSION"
+
+          echo "CHART_VERSION=$CHART_VERSION" >> "$GITHUB_ENV"
+          echo "Chart version: $CHART_VERSION"
+
+      - name: Package Helm chart
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/helm-packages"
+
+          helm package "$CHART_PATH" \
+            --destination "$RUNNER_TEMP/helm-packages"
+
+          test -f "$RUNNER_TEMP/helm-packages/$CHART_NAME-$CHART_VERSION.tgz"
+
+      - name: Authenticate Helm to JFrog
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          test -n "$JFROG_USERNAME"
+          test -n "$JFROG_ACCESS_TOKEN"
+
+          printf '%s' "$JFROG_ACCESS_TOKEN" | \
+            helm registry login "$JFROG_REGISTRY" \
+              --username "$JFROG_USERNAME" \
+              --password-stdin
+
+      - name: Publish Helm chart to JFrog
+        run: |
+          set -euo pipefail
+
+          CHART_FILE="$RUNNER_TEMP/helm-packages/$CHART_NAME-$CHART_VERSION.tgz"
+
+          helm push "$CHART_FILE" \
+            "oci://$JFROG_REGISTRY/$JFROG_HELM_REPO"
+
+      - name: Show published chart
+        run: |
+          set -euo pipefail
+
+          CHART_URI="oci://$JFROG_REGISTRY/$JFROG_HELM_REPO/$CHART_NAME"
+
+          helm show chart "$CHART_URI" \
+            --version "$CHART_VERSION" > /dev/null
+
+          {
+            echo "## Helm Chart Published"
+            echo ""
+            echo "Registry: $JFROG_REGISTRY"
+            echo ""
+            echo "Repository: $JFROG_HELM_REPO"
+            echo ""
+            echo "Chart: $CHART_NAME"
+            echo ""
+            echo "Version: $CHART_VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"
