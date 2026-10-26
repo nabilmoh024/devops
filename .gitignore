@@ -8,3 +8,14 @@ crash.*.log
 
 # Keep the dependency lock file committed: .terraform.lock.hcl
 *.auto.tfvars
+
+# Python application
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local environment files and logs
+.env
+.env.*
+*.log
