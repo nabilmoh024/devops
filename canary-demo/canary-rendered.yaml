@@ -1,0 +1,202 @@
+---
+# Source: canary-demo/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canary-demo
+  labels:
+    helm.sh/chart: canary-demo-0.1.0
+    app.kubernetes.io/name: canary-demo
+    app.kubernetes.io/instance: canary-demo
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken: false
+
+---
+# Source: canary-demo/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-demo
+  labels:
+    helm.sh/chart: canary-demo-0.1.0
+    app.kubernetes.io/name: canary-demo
+    app.kubernetes.io/instance: canary-demo
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: canary-demo
+    app.kubernetes.io/instance: canary-demo
+
+---
+# Source: canary-demo/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary-demo-v1
+  labels:
+    helm.sh/chart: canary-demo-0.1.0
+    app.kubernetes.io/name: canary-demo
+    app.kubernetes.io/instance: canary-demo
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+    version: "v1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: canary-demo
+      app.kubernetes.io/instance: canary-demo
+      version: "v1"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: canary-demo
+        app.kubernetes.io/instance: canary-demo
+        version: "v1"
+    spec:
+      imagePullSecrets:
+        - name: jfrog-registry-secret
+      serviceAccountName: canary-demo
+      securityContext:
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: canary-demo
+          image: "trialbot.jfrog.io/docker-canary-poc-local/canary-demo:v1"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: APP_VERSION
+              value: "v1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+---
+# Source: canary-demo/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary-demo-v2
+  labels:
+    helm.sh/chart: canary-demo-0.1.0
+    app.kubernetes.io/name: canary-demo
+    app.kubernetes.io/instance: canary-demo
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+    version: "v2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: canary-demo
+      app.kubernetes.io/instance: canary-demo
+      version: "v2"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: canary-demo
+        app.kubernetes.io/instance: canary-demo
+        version: "v2"
+    spec:
+      imagePullSecrets:
+        - name: jfrog-registry-secret
+      serviceAccountName: canary-demo
+      securityContext:
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: canary-demo
+          image: "trialbot.jfrog.io/docker-canary-poc-local/canary-demo:v2"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: APP_VERSION
+              value: "v2"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+# Source: canary-demo/templates/tests/test-connection.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "canary-demo-test-connection"
+  labels:
+    helm.sh/chart: canary-demo-0.1.0
+    app.kubernetes.io/name: canary-demo
+    app.kubernetes.io/instance: canary-demo
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['canary-demo:80']
+  restartPolicy: Never
+
