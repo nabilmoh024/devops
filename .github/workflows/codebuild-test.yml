@@ -1,0 +1,21 @@
+
+name: CodeBuild Runner Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-runner:
+    name: Test AWS CodeBuild Runner
+    runs-on:
+      - codebuild-devops-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Verify runner
+        run: |
+          echo "GitHub Actions running on AWS CodeBuild"
+          uname -a
+          echo "Runner test successful"
