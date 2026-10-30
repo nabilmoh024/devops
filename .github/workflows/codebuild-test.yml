@@ -1,8 +1,11 @@
 
 name: CodeBuild Runner Test
 
+#
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - feature-canary-demo
 
 permissions:
   contents: read
