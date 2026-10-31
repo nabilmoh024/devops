@@ -60,15 +60,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Use one runner egress IP for both the allowlist update and subsequent API calls.
+          wait_update() {
+            local id="$1" status attempt
+            for attempt in $(seq 1 90); do
+              status="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$id" --query 'update.status' --output text)"
+              echo "EKS update $id: $status (attempt $attempt)"
+              case "$status" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "EKS update failed: $status" >&2; return 1 ;;
+              esac
+              sleep 10
+            done
+            echo "Timed out waiting for EKS update $id" >&2
+            return 1
+          }
           ip="$(curl --fail --silent --show-error --max-time 15 https://checkip.amazonaws.com | tr -d '\r\n')"
           [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'Could not obtain public IPv4'; exit 1; }
           cidr="${ip}/32"
           echo "RUNNER_CIDR=$cidr" >> "$GITHUB_ENV"
-          existing="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
           enabled="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.endpointPublicAccess' --output text)"
           [[ "$enabled" == 'True' ]] || { echo 'EKS public endpoint disabled'; exit 1; }
-          # Persist the exact starting configuration for failure recovery.
+          existing="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
           printf '%s\n' "$existing" > "$RUNNER_TEMP/eks-original-cidrs.json"
           if jq -e --arg cidr "$cidr" 'index($cidr) != null' <<< "$existing" >/dev/null; then
             echo 'Runner CIDR already present; will not remove it during cleanup.'
@@ -76,14 +88,15 @@ jobs:
             exit 0
           fi
           new="$(jq -c --arg cidr "$cidr" '. + [$cidr] | unique' <<< "$existing")"
-          count="$(jq 'length' <<< "$new")"
-          (( count <= 50 )) || { echo 'EKS CIDR limit would be exceeded'; exit 1; }
+          (( $(jq 'length' <<< "$new") <= 50 )) || { echo 'EKS CIDR limit would be exceeded'; exit 1; }
+          # Flag before mutation: cleanup will reconcile even if the waiter fails.
           echo 'added=true' >> "$GITHUB_OUTPUT"
-          # Mark before update, so cleanup still runs if the API call or waiter fails.
           echo 'EKS_CIDR_UPDATE_ATTEMPTED=true' >> "$GITHUB_ENV"
           update_id="$(aws eks update-cluster-config --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --resources-vpc-config "endpointPublicAccess=true,publicAccessCidrs=$(jq -r 'join(",")' <<< "$new")" --query 'update.id' --output text)"
-          aws eks wait cluster-active --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
-          aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$update_id" --query 'update.status' --output text | grep -qx Successful
+          echo "EKS_ALLOW_UPDATE_ID=$update_id" >> "$GITHUB_ENV"
+          wait_update "$update_id"
+          effective="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
+          jq -e --arg cidr "$cidr" 'index($cidr) != null' <<< "$effective" >/dev/null || { echo 'CIDR missing after successful update'; exit 1; }
           echo "Temporarily allowed runner CIDR $cidr"
 
       - name: Set up kubectl
@@ -297,17 +310,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Do not overwrite unrelated CIDR changes: read current list and remove only ours.
+          wait_update() {
+            local id="$1" status attempt
+            for attempt in $(seq 1 90); do
+              status="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$id" --query 'update.status' --output text)"
+              echo "EKS update $id: $status (attempt $attempt)"
+              case "$status" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "EKS update ended: $status" >&2; return 1 ;;
+              esac
+              sleep 10
+            done
+            echo "Timed out waiting for EKS update $id" >&2
+            return 1
+          }
+          # If the addition update was started but timed out in the previous step,
+          # wait for it to settle before changing the endpoint configuration again.
+          if [[ -n "${EKS_ALLOW_UPDATE_ID:-}" ]]; then
+            wait_update "$EKS_ALLOW_UPDATE_ID" || echo 'Prior update did not succeed; checking actual CIDRs.'
+          fi
+          # Wait for any currently running endpoint update (handles partial failures).
+          for attempt in $(seq 1 90); do
+            pending="$(aws eks list-updates --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'updateIds' --output json | jq -r '.[]' | head -n 10)"
+            active_id=''
+            while IFS= read -r id; do
+              [[ -n "$id" ]] || continue
+              state="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$id" --query 'update.status' --output text)"
+              if [[ "$state" == InProgress || "$state" == Pending ]]; then active_id="$id"; break; fi
+            done <<< "$pending"
+            [[ -n "$active_id" ]] || break
+            echo "Waiting for outstanding EKS update $active_id"
+            sleep 10
+            if (( attempt == 90 )); then echo 'Timed out waiting for outstanding update' >&2; exit 1; fi
+          done
+          # Read current state AFTER prior updates settle; preserve unrelated CIDRs.
           current="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
           updated="$(jq -c --arg cidr "$RUNNER_CIDR" 'map(select(. != $cidr))' <<< "$current")"
-          if [[ "$updated" == "$current" ]]; then
+          if jq -e --arg cidr "$RUNNER_CIDR" 'index($cidr) == null' <<< "$current" >/dev/null; then
             echo 'Runner CIDR already absent.'
             exit 0
           fi
           (( $(jq 'length' <<< "$updated") > 0 )) || { echo 'Refusing to leave public CIDR list empty'; exit 1; }
-          # If a prior update is still in progress, wait before attempting removal.
-          aws eks wait cluster-active --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
           update_id="$(aws eks update-cluster-config --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --resources-vpc-config "endpointPublicAccess=true,publicAccessCidrs=$(jq -r 'join(",")' <<< "$updated")" --query 'update.id' --output text)"
-          aws eks wait cluster-active --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
-          aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$update_id" --query 'update.status' --output text | grep -qx Successful
+          wait_update "$update_id"
+          effective="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
+          jq -e --arg cidr "$RUNNER_CIDR" 'index($cidr) == null' <<< "$effective" >/dev/null || { echo 'Runner CIDR still present' >&2; exit 1; }
           echo "Removed temporary runner CIDR $RUNNER_CIDR"
