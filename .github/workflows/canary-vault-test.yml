@@ -1,0 +1,49 @@
+
+name: Canary Vault OIDC Test
+
+on:
+  push:
+    branches:
+      - feature-canary-demo
+    paths:
+      - .github/workflows/canary-vault-test.yml
+
+permissions:
+  contents: read
+
+jobs:
+  vault-test:
+    name: Test GitHub to Vault
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Retrieve JFrog credentials from Vault
+        id: vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: https://vault-cluster-public-vault-ee2ad25b.d032a100.z1.hashicorp.cloud:8200
+          namespace: admin
+          path: jwt
+          method: jwt
+          role: github-canary-demo
+          jwtGithubAudience: vault://github-canary-demo
+          exportEnv: false
+          secrets: |
+            kv/data/canary/jfrog username | JFROG_USERNAME ;
+            kv/data/canary/jfrog token | JFROG_TOKEN
+
+      - name: Confirm Vault retrieval
+        env:
+          JFROG_USERNAME: ${{ steps.vault.outputs.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ steps.vault.outputs.JFROG_TOKEN }}
+        run: |
+          if [[ -n "$JFROG_USERNAME" && -n "$JFROG_TOKEN" ]]; then
+            echo "SUCCESS: GitHub authenticated to Vault and retrieved JFrog credentials"
+          else
+            echo "ERROR: Missing Vault credentials"
+            exit 1
+          fi
