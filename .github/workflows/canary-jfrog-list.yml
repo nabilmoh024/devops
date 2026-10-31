@@ -1,0 +1,53 @@
+
+name: Canary JFrog Artifact List
+
+on:
+  push:
+    branches:
+      - feature-canary-demo
+    paths:
+      - .github/workflows/canary-jfrog-list.yml
+
+permissions:
+  contents: read
+
+jobs:
+  list-artifacts:
+    name: List JFrog Artifacts
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Retrieve JFrog credentials from Vault
+        id: vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: https://vault-cluster-public-vault-ee2ad25b.d032a100.z1.hashicorp.cloud:8200
+          namespace: admin
+          path: jwt
+          method: jwt
+          role: github-canary-demo
+          jwtGithubAudience: vault://github-canary-demo
+          exportEnv: false
+          secrets: |
+            kv/data/canary/jfrog username | JFROG_USERNAME ;
+            kv/data/canary/jfrog token | JFROG_TOKEN
+
+      - name: List artifacts from JFrog
+        env:
+          JFROG_USERNAME: ${{ steps.vault.outputs.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ steps.vault.outputs.JFROG_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for repo in docker-canary-poc-local helm-canary-poc-local; do
+            echo "=== $repo ==="
+
+            curl --fail --silent --show-error \
+              --user "$JFROG_USERNAME:$JFROG_TOKEN" \
+              "https://trialbot.jfrog.io/artifactory/api/storage/$repo?list&deep=1&listFolders=1" \
+              | jq -r '.files[] | .uri'
+          done
