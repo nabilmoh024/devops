@@ -287,10 +287,21 @@ jobs:
         run: |
           set -euo pipefail
           kubectl get pods -n "$NAMESPACE"
-          for d in canary-demo-v1 canary-demo-v2; do
-            containers="$(kubectl get deployment "$d" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[*].name}')"
-            [[ "$containers" == *istio-proxy* ]] || { echo "No Istio sidecar in $d"; exit 1; }
+          # Istio injects Envoy into the Pod at admission time, not into the Deployment template.
+          for version in v1 v2; do
+            pod="$(kubectl get pods -n "$NAMESPACE" \
+              -l "app.kubernetes.io/instance=canary-demo,version=$version" \
+              -o jsonpath='{.items[0].metadata.name}')"
+            [[ -n "$pod" ]] || { echo "No Pod found for $version" >&2; exit 1; }
+            kubectl wait --for=condition=Ready "pod/$pod" -n "$NAMESPACE" --timeout=180s
+            containers="$(kubectl get pod "$pod" -n "$NAMESPACE" -o jsonpath='{.spec.containers[*].name}')"
+            echo "$version Pod $pod containers: $containers"
+            [[ " $containers " == *" istio-proxy "* ]] || {
+              echo "Istio sidecar missing from $pod" >&2
+              exit 1
+            }
           done
+
           kubectl exec -n "$NAMESPACE" deployment/canary-demo-v1 -c canary-demo -- python -c '
           import collections, json, urllib.request
           counts=collections.Counter()
