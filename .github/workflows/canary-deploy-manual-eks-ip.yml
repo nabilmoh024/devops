@@ -294,13 +294,21 @@ jobs:
               -o jsonpath='{.items[0].metadata.name}')"
             [[ -n "$pod" ]] || { echo "No Pod found for $version" >&2; exit 1; }
             kubectl wait --for=condition=Ready "pod/$pod" -n "$NAMESPACE" --timeout=180s
-            containers="$(kubectl get pod "$pod" -n "$NAMESPACE" -o jsonpath='{.spec.containers[*].name}')"
+            containers="$(kubectl get pod "$pod" -n "$NAMESPACE" \
+              -o jsonpath='{.spec.containers[*].name}')"
+
+            init_containers="$(kubectl get pod "$pod" -n "$NAMESPACE" \
+              -o jsonpath='{.spec.initContainers[*].name}')"
+
             echo "$version Pod $pod containers: $containers"
-            [[ " $containers " == *" istio-proxy "* ]] || {
-              echo "Istio sidecar missing from $pod" >&2
-              exit 1
-            }
-          done
+            echo "$version Pod $pod init containers: $init_containers"
+
+            if [[ " $containers $init_containers " != *" istio-proxy "* ]]; then
+             echo "Istio sidecar missing from $pod" >&2
+             exit 1
+            fi
+
+            echo "Istio sidecar verified for $version"
 
           kubectl exec -n "$NAMESPACE" deployment/canary-demo-v1 -c canary-demo -- python -c '
           import collections, json, urllib.request
