@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_vpc_env_dev_tfvars", "label": "dev.tfvars", "file_type": "code", "source_file": "vpc/env/dev.tfvars", "source_location": null, "type": "terraform_file"}], "edges": [], "_terraform_scope": "terraform_c_tf_devops_vpc_env_25c531e32014bcd8"}

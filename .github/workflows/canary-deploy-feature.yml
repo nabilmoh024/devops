@@ -1,0 +1,180 @@
+name: Canary POC - Deploy to existing EKS
+
+on:
+  push:
+    branches:
+      - feature-canary-demo
+    paths:
+      - 'vault/**'
+      - '.github/workflows/canary-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: 'Existing JFrog OCI chart version'
+        type: string
+        default: '0.1.1'
+        required: true
+      v2_weight:
+        description: 'Percentage routed to v2 (0-100)'
+        type: string
+        default: '10'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-poc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/feature-canary-demo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_REGION: ap-south-1
+      EKS_CLUSTER: ${{ vars.EKS_CLUSTER_NAME }}
+      NAMESPACE: canary-demo
+      CHART: oci://trialbot.jfrog.io/helm-canary-poc-local/canary-demo
+      CHART_VERSION: ${{ inputs.chart_version || '0.1.1' }}
+      V2_WEIGHT: ${{ inputs.v2_weight || '10' }}
+
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$EKS_CLUSTER" || { echo 'Set repository variable EKS_CLUSTER_NAME'; exit 1; }
+          [[ "$V2_WEIGHT" =~ ^(0|[1-9][0-9]?|100)$ ]] || { echo 'v2_weight must be 0-100'; exit 1; }
+          [[ "$CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid chart version'; exit 1; }
+
+      - name: Configure existing AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl for existing EKS
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER"
+          kubectl get nodes
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Ensure namespace and pre-existing Vault secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl get secret jfrog-registry-secret -n "$NAMESPACE" -o jsonpath='{.type}' | grep -qx 'kubernetes.io/dockerconfigjson'
+          kubectl get vaultstaticsecret jfrog-registry -n "$NAMESPACE" >/dev/null
+
+      - name: Install or reconcile Istio (sidecar mode)
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm repo add istio https://istio-release.storage.googleapis.com/charts
+          helm repo update
+          helm upgrade --install istio-base istio/base \
+            -n istio-system --create-namespace \
+            --set defaultRevision=default --wait --timeout 5m
+          helm upgrade --install istiod istio/istiod \
+            -n istio-system \
+            --set pilot.resources.requests.cpu=100m \
+            --set pilot.resources.requests.memory=256Mi \
+            --set pilot.resources.limits.memory=1Gi \
+            --wait --timeout 5m
+          kubectl rollout status deployment/istiod -n istio-system --timeout=180s
+          kubectl label namespace "$NAMESPACE" istio-injection=enabled --overwrite
+
+      - name: Authenticate Helm to JFrog OCI
+        shell: bash
+        env:
+          JFROG_USER: ${{ secrets.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$JFROG_USER" && test -n "$JFROG_TOKEN" || { echo 'Missing JFrog GitHub secrets'; exit 1; }
+          printf '%s' "$JFROG_TOKEN" | helm registry login trialbot.jfrog.io \
+            --username "$JFROG_USER" --password-stdin
+
+      - name: Deploy existing v1 and v2 Helm chart
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm upgrade --install canary-demo "$CHART" \
+            --version "$CHART_VERSION" \
+            -n "$NAMESPACE" --wait --timeout 5m
+          # Existing Pods might predate namespace injection: restart only if needed.
+          for deployment in canary-demo-v1 canary-demo-v2; do
+            containers="$(kubectl get deployment "$deployment" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[*].name}')"
+            if [[ " $containers " != *' istio-proxy '* ]]; then
+              kubectl rollout restart deployment/"$deployment" -n "$NAMESPACE"
+            fi
+          done
+          kubectl rollout status deployment/canary-demo-v1 -n "$NAMESPACE" --timeout=240s
+          kubectl rollout status deployment/canary-demo-v2 -n "$NAMESPACE" --timeout=240s
+
+      - name: Apply DestinationRule and weighted VirtualService
+        shell: bash
+        run: |
+          set -euo pipefail
+          V1_WEIGHT=$((100 - V2_WEIGHT))
+          cat <<'EOF' | kubectl apply -n canary-demo -f -
+          apiVersion: networking.istio.io/v1
+          kind: DestinationRule
+          metadata:
+            name: canary-demo
+          spec:
+            host: canary-demo.canary-demo.svc.cluster.local
+            subsets:
+              - name: v1
+                labels:
+                  version: v1
+              - name: v2
+                labels:
+                  version: v2
+          EOF
+          cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
+          apiVersion: networking.istio.io/v1
+          kind: VirtualService
+          metadata:
+            name: canary-demo
+          spec:
+            hosts:
+              - canary-demo.canary-demo.svc.cluster.local
+            http:
+              - route:
+                  - destination:
+                      host: canary-demo.canary-demo.svc.cluster.local
+                      subset: v1
+                    weight: $V1_WEIGHT
+                  - destination:
+                      host: canary-demo.canary-demo.svc.cluster.local
+                      subset: v2
+                    weight: $V2_WEIGHT
+          EOF
+          kubectl get dr,vs -n "$NAMESPACE"
+
+      - name: Verify injected Pods and canary responses
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl get pods -n "$NAMESPACE"
+          for deployment in canary-demo-v1 canary-demo-v2; do
+            containers="$(kubectl get deployment "$deployment" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[*].name}')"
+            [[ " $containers " == *' istio-proxy '* ]] || { echo "$deployment missing Istio proxy"; exit 1; }
+          done
+          # Requests originate inside the mesh. Test reachability, not exact sample percentages.
+          kubectl exec -n "$NAMESPACE" deployment/canary-demo-v1 -- \
+            python -c 'import json,urllib.request,collections; u="http://canary-demo.canary-demo.svc.cluster.local/"; c=collections.Counter(); [(lambda d:c.update([d["version"]]))(json.load(urllib.request.urlopen(u,timeout=5))) for _ in range(100)]; print(dict(c)); assert sum(c.values())==100'
