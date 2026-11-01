@@ -16,6 +16,6 @@ kubernetes_version = "1.36"
 admin_principal_arns = []
 
 node_instance_types       = ["t3.small", "t8i.small"]
-node_max_size             = 2
+node_max_size             = 4
 node_initial_desired_size = 1
 log_retention_days        = 1
