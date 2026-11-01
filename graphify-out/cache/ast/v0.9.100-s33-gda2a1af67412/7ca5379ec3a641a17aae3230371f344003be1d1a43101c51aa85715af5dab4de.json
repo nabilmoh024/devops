@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_eks_env_dev_backend_hcl", "label": "dev.backend.hcl", "file_type": "code", "source_file": "eks/env/dev.backend.hcl", "source_location": null, "type": "terraform_file"}], "edges": [], "_terraform_scope": "terraform_c_tf_devops_eks_env_42359999f2813d0c"}

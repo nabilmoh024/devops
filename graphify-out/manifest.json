@@ -1,0 +1,416 @@
+{
+  ".claude/settings.json": {
+    "mtime": 1792688782.3843093,
+    "seen": 1793559244.5512092,
+    "ast_hash": "625dd7cf6bf02ea2fa0e39fc1e9735ff",
+    "semantic_hash": ""
+  },
+  ".github/workflows/canary-deploy-feature.yml": {
+    "mtime": 1793474272.7274308,
+    "seen": 1793559244.5512204,
+    "ast_hash": "4cdfbf742654a5ece03d0fea0a059dee",
+    "semantic_hash": ""
+  },
+  ".github/workflows/canary-deploy-manual-eks-ip.yml": {
+    "mtime": 1793540040.455374,
+    "seen": 1793559244.5512264,
+    "ast_hash": "0ac18e3fdf7d8d079ef7e44b9367bd6c",
+    "semantic_hash": ""
+  },
+  ".github/workflows/canary-helm-publish.yml": {
+    "mtime": 1793474272.7294426,
+    "seen": 1793559244.5512295,
+    "ast_hash": "9b96fff6083259605e4f9b70cc9bd8b6",
+    "semantic_hash": ""
+  },
+  ".github/workflows/canary-image-build_old.yml": {
+    "mtime": 1793024862.447546,
+    "seen": 1793559244.5512326,
+    "ast_hash": "7f200923004ef6a78d918c77f2a3d7a3",
+    "semantic_hash": ""
+  },
+  ".github/workflows/canary-jfrog-list.yml": {
+    "mtime": 1793474272.7304304,
+    "seen": 1793559244.551235,
+    "ast_hash": "6e98fad393ad52b284ba8c3cfeaa1a72",
+    "semantic_hash": ""
+  },
+  ".github/workflows/canary-vault-test.yml": {
+    "mtime": 1793474272.7314308,
+    "seen": 1793559244.5512383,
+    "ast_hash": "f630414079b85c1b7ccb36412f79af86",
+    "semantic_hash": ""
+  },
+  ".github/workflows/codebuild-test.yml": {
+    "mtime": 1793474458.1406724,
+    "seen": 1793559244.5512407,
+    "ast_hash": "17fe884303b78cbd40f9b1c91a3534f2",
+    "semantic_hash": ""
+  },
+  ".github/workflows/eks-scale.yml": {
+    "mtime": 1792605108.6180763,
+    "seen": 1793559244.5512433,
+    "ast_hash": "c1cb3e6c6e7b471bc11ed6854e4ddd8c",
+    "semantic_hash": ""
+  },
+  ".github/workflows/grafana.yml": {
+    "mtime": 1792699291.226316,
+    "seen": 1793559244.5512452,
+    "ast_hash": "69ce03268964a2fb1a45f122d4eda453",
+    "semantic_hash": ""
+  },
+  ".github/workflows/helm.yml": {
+    "mtime": 1792679320.3585567,
+    "seen": 1793559244.5512476,
+    "ast_hash": "faffd8e31ed784ff44ae5a4e8e0378e8",
+    "semantic_hash": ""
+  },
+  ".github/workflows/istio.yml": {
+    "mtime": 1792605108.6200747,
+    "seen": 1793559244.5512507,
+    "ast_hash": "fd8e89f7e7ccfb28d5843733b0ed46cf",
+    "semantic_hash": ""
+  },
+  ".github/workflows/jfrog-helm.yml": {
+    "mtime": 1792787463.7320282,
+    "seen": 1793559244.551253,
+    "ast_hash": "4cd8c55277f12494bcc5cea2520d61a9",
+    "semantic_hash": ""
+  },
+  ".github/workflows/terraform-destroy.yml": {
+    "mtime": 1792605108.6210747,
+    "seen": 1793559244.5512552,
+    "ast_hash": "48e795c9b14a2d2aa007f77d3a650d8d",
+    "semantic_hash": ""
+  },
+  ".github/workflows/terraform.yml": {
+    "mtime": 1792605108.622076,
+    "seen": 1793559244.5512574,
+    "ast_hash": "a9043005c5120c4e9976460820c4410d",
+    "semantic_hash": ""
+  },
+  ".github/workflows/terrformunlock.yml": {
+    "mtime": 1792605108.622076,
+    "seen": 1793559244.5512593,
+    "ast_hash": "04f6598441e56a8ddb1a030778fe6a8a",
+    "semantic_hash": ""
+  },
+  "canary-demo/app/main.py": {
+    "mtime": 1793474272.7334304,
+    "seen": 1793559244.5512614,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "canary-demo/canary-rendered.yaml": {
+    "mtime": 1793031905.9475236,
+    "seen": 1793559244.551264,
+    "ast_hash": "8e12b3db78cece5b5c2836e48ee32bf2",
+    "semantic_hash": ""
+  },
+  "canary-demo/helm/canary-demo/Chart.yaml": {
+    "mtime": 1793035136.083777,
+    "seen": 1793559244.551266,
+    "ast_hash": "ee071c052552842f57d8ff78caab8d25",
+    "semantic_hash": ""
+  },
+  "canary-demo/helm/canary-demo/values.yaml": {
+    "mtime": 1793029152.3511214,
+    "seen": 1793559244.5512683,
+    "ast_hash": "33ca3f85c7e8dfd1e34155c2335478b5",
+    "semantic_hash": ""
+  },
+  "canary-demo/values-original.yaml": {
+    "mtime": 1793029023.4591067,
+    "seen": 1793559244.5512707,
+    "ast_hash": "a300dbcb76cdbbaa6537b3a02b274849",
+    "semantic_hash": ""
+  },
+  "helm/test-release/Chart.yaml": {
+    "mtime": 1792605108.6476142,
+    "seen": 1793559244.5512726,
+    "ast_hash": "4c4d6bf1110fec69773e32002fa4d967",
+    "semantic_hash": ""
+  },
+  "helm/test-release/values.yaml": {
+    "mtime": 1792605108.650614,
+    "seen": 1793559244.5512762,
+    "ast_hash": "c8f98868ed2ba40a8368b5c98c1a3180",
+    "semantic_hash": ""
+  },
+  "helm/webapp/Chart.yaml": {
+    "mtime": 1792679320.3620903,
+    "seen": 1793559244.5512784,
+    "ast_hash": "651b22fe51f6d3e67b11a58fb37b7841",
+    "semantic_hash": ""
+  },
+  "helm/webapp/values-internet.yaml": {
+    "mtime": 1792679320.3843007,
+    "seen": 1793559244.5512807,
+    "ast_hash": "3a59da62876e2b8e30713be9486f043d",
+    "semantic_hash": ""
+  },
+  "helm/webapp/values-istio.yaml": {
+    "mtime": 1792679320.3969665,
+    "seen": 1793559244.5512826,
+    "ast_hash": "24633352c6a113ec35cd9550d74866ab",
+    "semantic_hash": ""
+  },
+  "helm/webapp/values.yaml": {
+    "mtime": 1792679320.3979657,
+    "seen": 1793559244.551285,
+    "ast_hash": "491886c013173af6014308e2cde77ee4",
+    "semantic_hash": ""
+  },
+  "helmingnx/values-poc.yaml": {
+    "mtime": 1792785623.8551877,
+    "seen": 1793559244.5512877,
+    "ast_hash": "4dcab443ae021831f24ed1ebc863003f",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/Chart.yaml": {
+    "mtime": 1792687749.7886837,
+    "seen": 1793559244.5512898,
+    "ast_hash": "2c2b4db920fd93fbe8f1637bdf78e988",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/charts/common/Chart.yaml": {
+    "mtime": 1792687750.071335,
+    "seen": 1793559244.5512922,
+    "ast_hash": "c9dd6292e3c54830486f71fbf7ef0d2e",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/charts/common/values.yaml": {
+    "mtime": 1792687750.1121228,
+    "seen": 1793559244.5512948,
+    "ast_hash": "89e38c0b195fbcf245b76bc1a5011602",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/ebs-csi-trust-policy.json": {
+    "mtime": 1792693400.5452204,
+    "seen": 1793559244.551297,
+    "ast_hash": "d074e493163cb5e1ce259da02395fbdc",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/gp3-storageclass.yaml": {
+    "mtime": 1792692371.4335706,
+    "seen": 1793559244.551299,
+    "ast_hash": "a26f90d4d74df7c428ffdf5c34d14a3b",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/values.yaml": {
+    "mtime": 1792699646.9983845,
+    "seen": 1793559244.5513015,
+    "ast_hash": "20357ba677d9cd82c3ab3fb016789975",
+    "semantic_hash": ""
+  },
+  "istio/gateway-values.yaml": {
+    "mtime": 1792684893.5175903,
+    "seen": 1793559244.551304,
+    "ast_hash": "25f156209fa4ebc4a589182d126d4612",
+    "semantic_hash": ""
+  },
+  "istio/istiod-values.yaml": {
+    "mtime": 1792605108.6606836,
+    "seen": 1793559244.5513067,
+    "ast_hash": "7d3330d52a19c1658187664b5b7cb136",
+    "semantic_hash": ""
+  },
+  "istio/manifests/peer-authentication.yaml": {
+    "mtime": 1792605108.666683,
+    "seen": 1793559244.5513096,
+    "ast_hash": "4922e0f20a38dc6c3640fc85f2ed5eca",
+    "semantic_hash": ""
+  },
+  "vault/vault-trust-policy.json": {
+    "mtime": 1793474272.735441,
+    "seen": 1793559244.5513132,
+    "ast_hash": "6c57a76d8bf7a6f2626c1254269646b5",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1792605108.6250746,
+    "seen": 1793559244.551316,
+    "ast_hash": "116427aded047d87fe8fa7f7615350f9",
+    "semantic_hash": ""
+  },
+  "canary-demo/app/requirements.txt": {
+    "mtime": 1793020322.092988,
+    "seen": 1793559244.551319,
+    "ast_hash": "edd3340335318f32fbdcd70e2f11fe4a",
+    "semantic_hash": ""
+  },
+  "canary-demo/helm/canary-demo/templates/NOTES.txt": {
+    "mtime": 1793028351.5509665,
+    "seen": 1793559244.5513215,
+    "ast_hash": "b7441487b05476c9b52444175a96862d",
+    "semantic_hash": ""
+  },
+  "eks/README.md": {
+    "mtime": 1792605108.628096,
+    "seen": 1793559244.5513246,
+    "ast_hash": "b4e05c5b9b61ee1a678371d0f9d53616",
+    "semantic_hash": ""
+  },
+  "helm/README.md": {
+    "mtime": 1792605108.6456149,
+    "seen": 1793559244.5513275,
+    "ast_hash": "5682c90d5a08eec7c04606733eac9066",
+    "semantic_hash": ""
+  },
+  "helm/repos.txt": {
+    "mtime": 1792605108.6466143,
+    "seen": 1793559244.5513315,
+    "ast_hash": "ff9021b8c726063c8a41f1943b0c862c",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/README.md": {
+    "mtime": 1792687749.7904942,
+    "seen": 1793559244.5513344,
+    "ast_hash": "9ead944dba8d2c47b7d5f2154f1c85cf",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/charts/common/README.md": {
+    "mtime": 1792687750.0733483,
+    "seen": 1793559244.5513368,
+    "ast_hash": "e2f6a3528f2c4319536195d091366c7c",
+    "semantic_hash": ""
+  },
+  "helmlearn/grafana/templates/NOTES.txt": {
+    "mtime": 1792687749.8330472,
+    "seen": 1793559244.5513391,
+    "ast_hash": "a4cf5df20b0ed48d281ab22ef4d75c9d",
+    "semantic_hash": ""
+  },
+  "istio/README.md": {
+    "mtime": 1792605108.660175,
+    "seen": 1793559244.551342,
+    "ast_hash": "02413349986fc71eae5f76ba8f01d420",
+    "semantic_hash": ""
+  },
+  "istio/task.txt": {
+    "mtime": 1792605108.667682,
+    "seen": 1793559244.5513444,
+    "ast_hash": "935f7c913ca63c8a0f9ace50f3f8d928",
+    "semantic_hash": ""
+  },
+  "vpc/README.md": {
+    "mtime": 1792605108.669682,
+    "seen": 1793559244.551347,
+    "ast_hash": "4880785c07c675e34395f33a5a47ae3e",
+    "semantic_hash": ""
+  },
+  "eks/.terraform.lock.hcl": {
+    "mtime": 1792605108.6260746,
+    "seen": 1793559315.2539003,
+    "ast_hash": "31bda15769c69e4ce4cedc48b30d6ed7",
+    "semantic_hash": ""
+  },
+  "eks/backend.tf": {
+    "mtime": 1792684893.514578,
+    "seen": 1793559315.2539036,
+    "ast_hash": "26967f2f3db69203df63ce2e45b406f4",
+    "semantic_hash": ""
+  },
+  "eks/data.tf": {
+    "mtime": 1792605108.6310952,
+    "seen": 1793559315.253906,
+    "ast_hash": "5160b3d3653b0bbf2db1fdf95fd65865",
+    "semantic_hash": ""
+  },
+  "eks/env/dev.backend.hcl": {
+    "mtime": 1792605108.634095,
+    "seen": 1793559315.253908,
+    "ast_hash": "8fe5953800de4d2891cee276bde8c164",
+    "semantic_hash": ""
+  },
+  "eks/env/dev.tfvars": {
+    "mtime": 1792605108.6350946,
+    "seen": 1793559315.25391,
+    "ast_hash": "5aa68663d47a393e0febcd0ed18012f8",
+    "semantic_hash": ""
+  },
+  "eks/main.tf": {
+    "mtime": 1792679320.3620903,
+    "seen": 1793559315.253913,
+    "ast_hash": "7486f3999e708c5dd8b5bbd694cecab8",
+    "semantic_hash": ""
+  },
+  "eks/outputs.tf": {
+    "mtime": 1792605108.639085,
+    "seen": 1793559315.2539146,
+    "ast_hash": "cdd5266e711cab84f32dadfc46be9a37",
+    "semantic_hash": ""
+  },
+  "eks/providers.tf": {
+    "mtime": 1792605108.6400938,
+    "seen": 1793559315.2539165,
+    "ast_hash": "c6236009201ab003d02ec75c63fdbf30",
+    "semantic_hash": ""
+  },
+  "eks/variables.tf": {
+    "mtime": 1792605108.6400938,
+    "seen": 1793559315.2539182,
+    "ast_hash": "a98b42b0639e79f2dba4241b9f3414c4",
+    "semantic_hash": ""
+  },
+  "eks/versions.tf": {
+    "mtime": 1792605108.6411037,
+    "seen": 1793559315.25392,
+    "ast_hash": "b779368dce577c3029b15cf8dcf7d099",
+    "semantic_hash": ""
+  },
+  "vpc/.terraform.lock.hcl": {
+    "mtime": 1792605108.668682,
+    "seen": 1793559315.2562327,
+    "ast_hash": "127b674530a00d08292138ce8500ef58",
+    "semantic_hash": ""
+  },
+  "vpc/backend.tf": {
+    "mtime": 1792684893.52559,
+    "seen": 1793559315.2562356,
+    "ast_hash": "5c8eb3622af312ada9310d364ca022ef",
+    "semantic_hash": ""
+  },
+  "vpc/env/dev.backend.hcl": {
+    "mtime": 1792605108.6792023,
+    "seen": 1793559315.2562377,
+    "ast_hash": "8fe5953800de4d2891cee276bde8c164",
+    "semantic_hash": ""
+  },
+  "vpc/env/dev.tfvars": {
+    "mtime": 1792605108.6802025,
+    "seen": 1793559315.25624,
+    "ast_hash": "24b44639a8168104dc983e5e604f3d08",
+    "semantic_hash": ""
+  },
+  "vpc/main.tf": {
+    "mtime": 1792684893.530589,
+    "seen": 1793559315.2562416,
+    "ast_hash": "86799c9cbdace2d3840c66f59b15aa93",
+    "semantic_hash": ""
+  },
+  "vpc/outputs.tf": {
+    "mtime": 1792605108.6832018,
+    "seen": 1793559315.2562435,
+    "ast_hash": "df63fbac29a8e921bdf50f1b0c0d46f3",
+    "semantic_hash": ""
+  },
+  "vpc/providers.tf": {
+    "mtime": 1792605108.6832018,
+    "seen": 1793559315.2562456,
+    "ast_hash": "c6236009201ab003d02ec75c63fdbf30",
+    "semantic_hash": ""
+  },
+  "vpc/variables.tf": {
+    "mtime": 1792605108.6842017,
+    "seen": 1793559315.2562475,
+    "ast_hash": "45012ef458f83a9071d6ecc126d1e8c5",
+    "semantic_hash": ""
+  },
+  "vpc/versions.tf": {
+    "mtime": 1792605108.6852021,
+    "seen": 1793559315.2562494,
+    "ast_hash": "75802c0e3d8d74d6f43ab095bde911b2",
+    "semantic_hash": ""
+  }
+}

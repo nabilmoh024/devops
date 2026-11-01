@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_eks_versions_tf", "label": "versions.tf", "file_type": "code", "source_file": "eks/versions.tf", "source_location": null, "type": "terraform_file"}], "edges": [], "_terraform_scope": "terraform_c_tf_devops_eks_2bd0684f53383a64"}
