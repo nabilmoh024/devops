@@ -309,6 +309,7 @@ jobs:
             fi
 
             echo "Istio sidecar verified for $version"
+          done  
 
           kubectl exec -n "$NAMESPACE" deployment/canary-demo-v1 -c canary-demo -- python -c '
           import collections, json, urllib.request
