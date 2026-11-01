@@ -1,0 +1,525 @@
+name: Infra Deploy (VPC > EKS > Canary)
+
+# End-to-end pipeline, run manually:
+#   1. vpc    terraform apply in vpc/   (network, NAT gateway)
+#   2. eks    terraform apply in eks/   (cluster + spot node group), after vpc
+#   3. canary make sure nodes exist, then install Vault Secrets Operator, Istio
+#             and the canary-demo chart from JFrog, and apply weighted routing
+#             (same steps as canary-deploy-manual-eks-ip.yml)
+#
+# Each job needs the one before it, so a failure stops the pipeline.
+# Set deploy_canary to false to build infrastructure only.
+#
+# Repository secrets used:   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#                            API_ALLOWED_CIDR, JFROG_USERNAME, JFROG_ACCESS_TOKEN
+# Repository variables used: AWS_REGION (default ap-south-1),
+#                            EKS_CLUSTER_NAME (default devops-<environment>-eks)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment (matches <layer>/env/<name>.tfvars)
+        type: choice
+        options:
+          - dev
+        default: dev
+      deploy_canary:
+        description: Deploy Vault Secrets Operator, Istio and canary-demo after EKS
+        type: boolean
+        default: true
+      chart_version:
+        description: Published JFrog Helm chart version
+        type: string
+        default: "0.1.1"
+      v2_weight:
+        description: Percentage of mesh traffic sent to v2 (0-100)
+        type: number
+        default: 10
+      nodes:
+        description: Minimum node count to have running before the canary deploy
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+        default: "2"
+
+permissions:
+  contents: read # required for checkout
+
+# Same group style as terraform.yml / istio.yml / eks-scale.yml: this pipeline
+# never overlaps with another Terraform, Istio or scale run on the cluster.
+concurrency:
+  group: terraform-eks-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. VPC
+  # -------------------------------------------------------------------------
+  vpc:
+    name: 1 / vpc / ${{ inputs.environment }} / apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: vpc
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+      - uses: hashicorp/setup-terraform@v4
+
+      - run: terraform fmt -check
+      - run: terraform init -backend-config=env/${{ inputs.environment }}.backend.hcl
+      - run: terraform validate
+
+      - name: Plan
+        run: terraform plan -var-file=env/${{ inputs.environment }}.tfvars -out=tfplan
+
+      - name: Apply
+        run: terraform apply tfplan
+
+  # -------------------------------------------------------------------------
+  # 2. EKS (reads the vpc layer's remote state, so it must run after vpc)
+  # -------------------------------------------------------------------------
+  eks:
+    name: 2 / eks / ${{ inputs.environment }} / apply
+    needs: vpc
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: eks
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+      - uses: hashicorp/setup-terraform@v4
+
+      - run: terraform fmt -check
+      - run: terraform init -backend-config=env/${{ inputs.environment }}.backend.hcl
+      - run: terraform validate
+
+      - name: Plan
+        run: terraform plan -var-file=env/${{ inputs.environment }}.tfvars -out=tfplan
+        env:
+          TF_VAR_api_allowed_cidrs: '["${{ secrets.API_ALLOWED_CIDR }}"]'
+
+      - name: Apply
+        run: terraform apply tfplan
+
+  # -------------------------------------------------------------------------
+  # 3. Canary POC (Vault Secrets Operator + Istio + canary-demo)
+  # -------------------------------------------------------------------------
+  canary:
+    name: 3 / canary-demo / v2 weight ${{ inputs.v2_weight }}
+    needs: eks
+    if: inputs.deploy_canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    # Also blocks a manual run of canary-deploy-manual-eks-ip.yml at the same time
+    concurrency:
+      group: canary-poc-eks-api-devops-${{ inputs.environment }}-eks
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || format('devops-{0}-eks', inputs.environment) }}
+      NAMESPACE: canary-demo
+      CHART_VERSION: ${{ inputs.chart_version }}
+      V2_WEIGHT: ${{ inputs.v2_weight }}
+      NODES: ${{ inputs.nodes }}
+      JFROG_HOST: trialbot.jfrog.io
+      CHART_REF: oci://trialbot.jfrog.io/helm-canary-poc-local/canary-demo
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]] || { echo 'Invalid chart version'; exit 1; }
+          [[ "$V2_WEIGHT" =~ ^[0-9]+$ ]] && (( V2_WEIGHT >= 0 && V2_WEIGHT <= 100 )) || { echo 'v2_weight must be 0..100'; exit 1; }
+          echo "V1_WEIGHT=$((100 - V2_WEIGHT))" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Terraform does not change desired_size after the first create, so a
+      # cluster that was scaled to 0 earlier would have no nodes here.
+      # This only scales UP, never down.
+      - name: Make sure the node group has enough nodes
+        shell: bash
+        run: |
+          set -euo pipefail
+          NG="$(aws eks list-nodegroups --cluster-name "$EKS_CLUSTER_NAME" --query 'nodegroups[0]' --output text)"
+          read -r MIN MAX CUR < <(aws eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$NG" \
+            --query 'nodegroup.scalingConfig.[minSize,maxSize,desiredSize]' --output text)
+          echo "Node group $NG: min=$MIN max=$MAX desired=$CUR, wanted at least $NODES"
+          if [ "$NODES" -gt "$MAX" ]; then
+            echo "::error::Requested $NODES nodes but node_max_size is $MAX. Raise node_max_size in eks/env/${{ inputs.environment }}.tfvars and re-run."
+            exit 1
+          fi
+          if [ "$CUR" -ge "$NODES" ]; then
+            echo "Already at $CUR node(s), nothing to do"; exit 0
+          fi
+          UPD="$(aws eks update-nodegroup-config --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$NG" \
+            --scaling-config "minSize=$MIN,maxSize=$MAX,desiredSize=$NODES" --query 'update.id' --output text)"
+          for _ in $(seq 1 60); do
+            S="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --nodegroup-name "$NG" --update-id "$UPD" --query 'update.status' --output text)"
+            case "$S" in
+              Successful) break ;;
+              Failed|Cancelled) echo "::error::Scaling update $S"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          for _ in $(seq 1 40); do
+            ST="$(aws eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$NG" --query 'nodegroup.status' --output text)"
+            [ "$ST" = "ACTIVE" ] && break
+            sleep 15
+          done
+          echo "Node group scaled to $NODES"
+
+      - name: Temporarily allow this runner to reach the EKS public API
+        id: eks_allow
+        shell: bash
+        run: |
+          set -euo pipefail
+          wait_update() {
+            local id="$1" status attempt
+            for attempt in $(seq 1 90); do
+              status="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$id" --query 'update.status' --output text)"
+              echo "EKS update $id: $status (attempt $attempt)"
+              case "$status" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "EKS update failed: $status" >&2; return 1 ;;
+              esac
+              sleep 10
+            done
+            echo "Timed out waiting for EKS update $id" >&2
+            return 1
+          }
+          ip="$(curl --fail --silent --show-error --max-time 15 https://checkip.amazonaws.com | tr -d '\r\n')"
+          [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'Could not obtain public IPv4'; exit 1; }
+          cidr="${ip}/32"
+          echo "RUNNER_CIDR=$cidr" >> "$GITHUB_ENV"
+          enabled="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.endpointPublicAccess' --output text)"
+          [[ "$enabled" == 'True' ]] || { echo 'EKS public endpoint disabled'; exit 1; }
+          existing="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
+          printf '%s\n' "$existing" > "$RUNNER_TEMP/eks-original-cidrs.json"
+          if jq -e --arg cidr "$cidr" 'index($cidr) != null' <<< "$existing" >/dev/null; then
+            echo 'Runner CIDR already present; will not remove it during cleanup.'
+            echo 'added=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          new="$(jq -c --arg cidr "$cidr" '. + [$cidr] | unique' <<< "$existing")"
+          (( $(jq 'length' <<< "$new") <= 50 )) || { echo 'EKS CIDR limit would be exceeded'; exit 1; }
+          # Flag before mutation: cleanup will reconcile even if the waiter fails.
+          echo 'added=true' >> "$GITHUB_OUTPUT"
+          echo 'EKS_CIDR_UPDATE_ATTEMPTED=true' >> "$GITHUB_ENV"
+          update_id="$(aws eks update-cluster-config --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --resources-vpc-config "endpointPublicAccess=true,publicAccessCidrs=$(jq -r 'join(",")' <<< "$new")" --query 'update.id' --output text)"
+          echo "EKS_ALLOW_UPDATE_ID=$update_id" >> "$GITHUB_ENV"
+          wait_update "$update_id"
+          effective="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
+          jq -e --arg cidr "$cidr" 'index($cidr) != null' <<< "$effective" >/dev/null || { echo 'CIDR missing after successful update'; exit 1; }
+          echo "Temporarily allowed runner CIDR $cidr"
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Connect to EKS and wait for nodes
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+          for i in $(seq 1 40); do
+            READY="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 == "Ready"' | wc -l)"
+            echo "Ready nodes: $READY / $NODES (attempt $i)"
+            [ "$READY" -ge "$NODES" ] && break
+            if [ "$i" -eq 40 ]; then
+              echo "::error::Nodes did not become Ready (spot capacity may be unavailable). Try a smaller node count."
+              exit 1
+            fi
+            sleep 15
+          done
+          kubectl get nodes
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Install or upgrade Vault Secrets Operator
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm repo add hashicorp https://helm.releases.hashicorp.com --force-update
+          helm repo update hashicorp
+          helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
+            --namespace vault-secrets-operator-system --create-namespace \
+            --set controller.replicas=1 --wait --timeout 8m
+
+      - name: Reconcile HCP Vault connection and auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat <<'EOF' | kubectl apply -n "$NAMESPACE" -f -
+          apiVersion: secrets.hashicorp.com/v1beta1
+          kind: VaultConnection
+          metadata:
+            name: hcp-vault
+          spec:
+            address: https://vault-cluster-public-vault-ee2ad25b.d032a100.z1.hashicorp.cloud:8200
+            skipTLSVerify: false
+          ---
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: vault-secrets-operator
+          ---
+          apiVersion: secrets.hashicorp.com/v1beta1
+          kind: VaultAuth
+          metadata:
+            name: hcp-vault-auth
+          spec:
+            vaultConnectionRef: hcp-vault
+            namespace: admin
+            method: jwt
+            mount: jwt-eks
+            jwt:
+              role: eks-jfrog-role
+              serviceAccount: vault-secrets-operator
+              audiences:
+                - vault
+          EOF
+
+      - name: Synchronize Vault-managed JFrog image-pull secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat <<'EOF' | kubectl apply -n "$NAMESPACE" -f -
+          apiVersion: secrets.hashicorp.com/v1beta1
+          kind: VaultStaticSecret
+          metadata:
+            name: jfrog-registry
+          spec:
+            vaultAuthRef: hcp-vault-auth
+            mount: kv
+            type: kv-v2
+            path: jfrog/registry
+            refreshAfter: 1h
+            destination:
+              create: true
+              name: jfrog-registry-secret
+              type: kubernetes.io/dockerconfigjson
+              transformation:
+                excludeRaw: true
+                excludes:
+                  - token
+                  - username
+                templates:
+                  .dockerconfigjson:
+                    text: |
+                      {
+                        "auths": {
+                          "trialbot.jfrog.io": {
+                            "username": {{ .Secrets.username | toJson }},
+                            "password": {{ .Secrets.token | toJson }},
+                            "auth": {{ printf "%s:%s" .Secrets.username .Secrets.token | b64enc | toJson }}
+                          }
+                        }
+                      }
+          EOF
+          for i in $(seq 1 40); do
+            if kubectl get secret jfrog-registry-secret -n "$NAMESPACE" -o jsonpath='{.type}' 2>/dev/null | grep -qx 'kubernetes.io/dockerconfigjson'; then
+              echo 'Vault-managed image-pull secret exists'; break
+            fi
+            if [ "$i" -eq 40 ]; then echo 'Timed out waiting for VSO secret'; exit 1; fi
+            sleep 10
+          done
+          keys="$(kubectl get secret jfrog-registry-secret -n "$NAMESPACE" -o go-template='{{range $k, $v := .data}}{{printf "%s " $k}}{{end}}')"
+          test "$keys" = '.dockerconfigjson ' || { echo 'Unexpected image-pull secret keys'; exit 1; }
+
+      - name: Install or upgrade Istio base and control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+          helm repo update istio
+          helm upgrade --install istio-base istio/base \
+            --namespace istio-system --create-namespace \
+            --set defaultRevision=default --wait --timeout 8m
+          helm upgrade --install istiod istio/istiod \
+            --namespace istio-system \
+            --set pilot.resources.requests.cpu=100m \
+            --set pilot.resources.requests.memory=256Mi \
+            --set pilot.resources.limits.memory=1Gi \
+            --wait --timeout 8m
+          kubectl rollout status deployment/istiod -n istio-system --timeout=180s
+
+      - name: Authenticate Helm to JFrog OCI
+        shell: bash
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$JFROG_USERNAME" && test -n "$JFROG_ACCESS_TOKEN" || { echo 'JFrog GitHub secrets missing'; exit 1; }
+          printf '%s' "$JFROG_ACCESS_TOKEN" | helm registry login "$JFROG_HOST" --username "$JFROG_USERNAME" --password-stdin
+
+      - name: Deploy chart with Envoy injection enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl label namespace "$NAMESPACE" istio-injection=enabled --overwrite
+          helm upgrade --install canary-demo "$CHART_REF" \
+            --version "$CHART_VERSION" --namespace "$NAMESPACE" --wait --timeout 8m
+          # Recreate existing Pods if they predate sidecar injection.
+          kubectl rollout restart deployment/canary-demo-v1 deployment/canary-demo-v2 -n "$NAMESPACE"
+          kubectl rollout status deployment/canary-demo-v1 -n "$NAMESPACE" --timeout=240s
+          kubectl rollout status deployment/canary-demo-v2 -n "$NAMESPACE" --timeout=240s
+
+      - name: Apply Istio subset and weighted routing rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat <<'EOF' | kubectl apply -n "$NAMESPACE" -f -
+          apiVersion: networking.istio.io/v1
+          kind: DestinationRule
+          metadata:
+            name: canary-demo
+          spec:
+            host: canary-demo.canary-demo.svc.cluster.local
+            subsets:
+              - name: v1
+                labels:
+                  version: v1
+              - name: v2
+                labels:
+                  version: v2
+          EOF
+          cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
+          apiVersion: networking.istio.io/v1
+          kind: VirtualService
+          metadata:
+            name: canary-demo
+          spec:
+            hosts:
+              - canary-demo.canary-demo.svc.cluster.local
+            http:
+              - route:
+                  - destination:
+                      host: canary-demo.canary-demo.svc.cluster.local
+                      subset: v1
+                    weight: ${V1_WEIGHT}
+                  - destination:
+                      host: canary-demo.canary-demo.svc.cluster.local
+                      subset: v2
+                    weight: ${V2_WEIGHT}
+          EOF
+
+      - name: Verify injected Pods and exercise canary routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl get pods -n "$NAMESPACE"
+          # Istio injects Envoy into the Pod at admission time, not into the Deployment template.
+          for version in v1 v2; do
+            pod="$(kubectl get pods -n "$NAMESPACE" \
+              -l "app.kubernetes.io/instance=canary-demo,version=$version" \
+              -o jsonpath='{.items[0].metadata.name}')"
+            [[ -n "$pod" ]] || { echo "No Pod found for $version" >&2; exit 1; }
+            kubectl wait --for=condition=Ready "pod/$pod" -n "$NAMESPACE" --timeout=180s
+            containers="$(kubectl get pod "$pod" -n "$NAMESPACE" -o jsonpath='{.spec.containers[*].name}')"
+            init_containers="$(kubectl get pod "$pod" -n "$NAMESPACE" -o jsonpath='{.spec.initContainers[*].name}')"
+            echo "$version Pod $pod containers: $containers"
+            echo "$version Pod $pod init containers: $init_containers"
+            if [[ " $containers $init_containers " != *" istio-proxy "* ]]; then
+              echo "Istio sidecar missing from $pod" >&2
+              exit 1
+            fi
+            echo "Istio sidecar verified for $version"
+          done
+
+          kubectl exec -n "$NAMESPACE" deployment/canary-demo-v1 -c canary-demo -- python -c '
+          import collections, json, urllib.request
+          counts=collections.Counter()
+          url="http://canary-demo.canary-demo.svc.cluster.local/"
+          for _ in range(100):
+              with urllib.request.urlopen(url, timeout=5) as response:
+                  counts[json.load(response)["version"]] += 1
+          print("Observed 100 requests:", dict(counts))
+          assert sum(counts.values()) == 100
+          if int("${{ inputs.v2_weight }}") > 0: assert counts["v2"] > 0
+          if int("${{ inputs.v2_weight }}") < 100: assert counts["v1"] > 0
+          '
+          echo 'Canary deployment and basic routing checks completed.'
+
+      - name: Remove temporary EKS API allowlist entry
+        if: ${{ always() && steps.eks_allow.outputs.added == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wait_update() {
+            local id="$1" status attempt
+            for attempt in $(seq 1 90); do
+              status="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$id" --query 'update.status' --output text)"
+              echo "EKS update $id: $status (attempt $attempt)"
+              case "$status" in
+                Successful) return 0 ;;
+                Failed|Cancelled) echo "EKS update ended: $status" >&2; return 1 ;;
+              esac
+              sleep 10
+            done
+            echo "Timed out waiting for EKS update $id" >&2
+            return 1
+          }
+          # If the addition update was started but timed out in the previous step,
+          # wait for it to settle before changing the endpoint configuration again.
+          if [[ -n "${EKS_ALLOW_UPDATE_ID:-}" ]]; then
+            wait_update "$EKS_ALLOW_UPDATE_ID" || echo 'Prior update did not succeed; checking actual CIDRs.'
+          fi
+          # Wait for any currently running endpoint update (handles partial failures).
+          for attempt in $(seq 1 90); do
+            pending="$(aws eks list-updates --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'updateIds' --output json | jq -r '.[]' | head -n 10)"
+            active_id=''
+            while IFS= read -r id; do
+              [[ -n "$id" ]] || continue
+              state="$(aws eks describe-update --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --update-id "$id" --query 'update.status' --output text)"
+              if [[ "$state" == InProgress || "$state" == Pending ]]; then active_id="$id"; break; fi
+            done <<< "$pending"
+            [[ -n "$active_id" ]] || break
+            echo "Waiting for outstanding EKS update $active_id"
+            sleep 10
+            if (( attempt == 90 )); then echo 'Timed out waiting for outstanding update' >&2; exit 1; fi
+          done
+          # Read current state AFTER prior updates settle; preserve unrelated CIDRs.
+          current="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
+          updated="$(jq -c --arg cidr "$RUNNER_CIDR" 'map(select(. != $cidr))' <<< "$current")"
+          if jq -e --arg cidr "$RUNNER_CIDR" 'index($cidr) == null' <<< "$current" >/dev/null; then
+            echo 'Runner CIDR already absent.'
+            exit 0
+          fi
+          (( $(jq 'length' <<< "$updated") > 0 )) || { echo 'Refusing to leave public CIDR list empty'; exit 1; }
+          update_id="$(aws eks update-cluster-config --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --resources-vpc-config "endpointPublicAccess=true,publicAccessCidrs=$(jq -r 'join(",")' <<< "$updated")" --query 'update.id' --output text)"
+          wait_update "$update_id"
+          effective="$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.publicAccessCidrs' --output json)"
+          jq -e --arg cidr "$RUNNER_CIDR" 'index($cidr) == null' <<< "$effective" >/dev/null || { echo 'Runner CIDR still present' >&2; exit 1; }
+          echo "Removed temporary runner CIDR $RUNNER_CIDR"
